@@ -49,6 +49,26 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.secretName }}
                   key: {{ .Values.secrets.data.redisUrlKey }}
+            - name: JWT_DEMO_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.secretName }}
+                  key: {{ .Values.secrets.data.jwtSecretKey }}
+            - name: OIDC_ISSUER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.secretName }}
+                  key: {{ .Values.secrets.data.oidcIssuerUrlKey }}
+            - name: OIDC_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.secretName }}
+                  key: {{ .Values.secrets.data.oidcClientIdKey }}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.secretName }}
+                  key: {{ .Values.secrets.data.oidcClientSecretKey }}
           volumeMounts:
             - name: tmp-volume
               mountPath: /tmp
@@ -57,4 +77,3 @@ spec:
       volumes:
         - name: tmp-volume
           emptyDir: {}
-

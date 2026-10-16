@@ -18,6 +18,10 @@ on:
         default: latest
         type: string
 
+concurrency:
+  group: agentops-gcp-prod
+  cancel-in-progress: false
+
 permissions:
   contents: read
   id-token: write
@@ -28,6 +32,7 @@ env:
   GCP_CLUSTER_NAME: agentops-platform-prod
   GCP_REPOSITORY: agentops-platform-prod
   GCP_NAMESPACE: prod
+  TF_STATE_BUCKET: project-cks-aug2026-agentops-tofu-state
   SERVICE_ACCOUNT_NAME: agentops-platform-sa-gcp
   TF_VAR_project_id: project-cks-aug2026
   TF_VAR_project_name: agentops-platform
@@ -37,10 +42,59 @@ env:
   TF_VAR_service_account_name: agentops-platform-sa-gcp
 
 jobs:
+  quality:
+    name: Test and validate before provisioning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./backend
+          pip install pytest pytest-asyncio ruff
+
+      - name: Lint and test backend
+        run: |
+          ruff check backend/src
+          pytest backend/tests
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Typecheck frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run typecheck
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+      - name: Validate GCP chart
+        run: |
+          helm lint deployment/helm/platform --values deployment/helm/platform/values-gcp.yaml
+          helm template agentops-platform deployment/helm/platform \
+            --namespace prod \
+            --values deployment/helm/platform/values-gcp.yaml \
+            --set global.environment=production \
+            --set namespace=prod
+
   infra:
-    name: Provision GCP infra with Terraform
+    name: Provision GCP infra with OpenTofu
+    needs: quality
     runs-on: ubuntu-latest
     environment: prod
+    outputs:
+      database_private_ip: ${{ steps.tofu-outputs.outputs.database_private_ip }}
+      redis_host: ${{ steps.tofu-outputs.outputs.redis_host }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,26 +105,47 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
         with:
-          terraform_version: 1.7.5
+          tofu_version: 1.8.8
 
-      - name: Terraform init and apply
+      - name: Create protected remote state bucket if needed
+        run: |
+          if ! gcloud storage buckets describe "gs://$TF_STATE_BUCKET" --project "$GCP_PROJECT_ID" >/dev/null 2>&1; then
+            gcloud storage buckets create "gs://$TF_STATE_BUCKET" \
+              --project "$GCP_PROJECT_ID" \
+              --location US \
+              --uniform-bucket-level-access \
+              --public-access-prevention
+          fi
+          gcloud storage buckets update "gs://$TF_STATE_BUCKET" --versioning
+
+      - name: OpenTofu init, validate, plan and apply
         working-directory: infrastructure/terraform/gcp
         env:
           TF_VAR_database_password: ${{ secrets.TF_DATABASE_PASSWORD }}
         run: |
-          terraform init -backend=false
-          terraform validate
-          terraform apply -auto-approve \
-            -var="project_id=${{ env.GCP_PROJECT_ID }}" \
-            -var="project_name=${{ env.TF_VAR_project_name }}" \
-            -var="environment=${{ env.TF_VAR_environment }}" \
-            -var="region=${{ env.GCP_REGION }}" \
-            -var="namespace=${{ env.GCP_NAMESPACE }}" \
-            -var="service_account_name=${{ env.SERVICE_ACCOUNT_NAME }}" \
-            -var="database_password=${{ secrets.TF_DATABASE_PASSWORD }}"
+          tofu init -input=false
+          tofu validate
+          if ! tofu state show google_service_account.platform >/dev/null 2>&1; then
+            if gcloud iam service-accounts describe \
+              "$SERVICE_ACCOUNT_NAME@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
+              --project "$GCP_PROJECT_ID" >/dev/null 2>&1; then
+              tofu import -input=false \
+                google_service_account.platform \
+                "projects/$GCP_PROJECT_ID/serviceAccounts/$SERVICE_ACCOUNT_NAME@$GCP_PROJECT_ID.iam.gserviceaccount.com"
+            fi
+          fi
+          tofu plan -input=false -out=tfplan
+          tofu apply -input=false -auto-approve tfplan
+
+      - name: Export deployment endpoints
+        id: tofu-outputs
+        working-directory: infrastructure/terraform/gcp
+        run: |
+          echo "database_private_ip=$(tofu output -raw database_private_ip)" >> "$GITHUB_OUTPUT"
+          echo "redis_host=$(tofu output -raw redis_host)" >> "$GITHUB_OUTPUT"
 
   build-push:
     name: Build and push container images
@@ -78,7 +153,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: prod
     env:
-      IMAGE_TAG: ${{ github.sha || inputs.image_tag || 'latest' }}
+      IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -112,11 +187,12 @@ jobs:
 
   deploy:
     name: Deploy app to GKE
-    needs: build-push
+    needs: [infra, build-push]
+    if: vars.DEPLOY_APPLICATION == 'true'
     runs-on: ubuntu-latest
     environment: prod
     env:
-      IMAGE_TAG: ${{ github.sha || inputs.image_tag || 'latest' }}
+      IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -135,6 +211,46 @@ jobs:
           gcloud container clusters get-credentials "$GCP_CLUSTER_NAME" \
             --region "$GCP_REGION" \
             --project "$GCP_PROJECT_ID"
+          kubectl create namespace "$GCP_NAMESPACE" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Publish runtime secrets to Secret Manager and Kubernetes
+        env:
+          TF_DATABASE_PASSWORD: ${{ secrets.TF_DATABASE_PASSWORD }}
+          JWT_DEMO_SECRET: ${{ secrets.JWT_DEMO_SECRET }}
+          OIDC_ISSUER_URL: ${{ secrets.OIDC_ISSUER_URL }}
+          OIDC_CLIENT_ID: ${{ secrets.OIDC_CLIENT_ID }}
+          OIDC_CLIENT_SECRET: ${{ secrets.OIDC_CLIENT_SECRET }}
+          DATABASE_PRIVATE_IP: ${{ needs.infra.outputs.database_private_ip }}
+          REDIS_HOST: ${{ needs.infra.outputs.redis_host }}
+        run: |
+          set -euo pipefail
+          : "${TF_DATABASE_PASSWORD:?Set TF_DATABASE_PASSWORD in the prod environment}"
+          : "${JWT_DEMO_SECRET:?Set JWT_DEMO_SECRET in the prod environment}"
+          : "${OIDC_ISSUER_URL:?Set OIDC_ISSUER_URL in the prod environment}"
+          : "${OIDC_CLIENT_ID:?Set OIDC_CLIENT_ID in the prod environment}"
+          : "${OIDC_CLIENT_SECRET:?Set OIDC_CLIENT_SECRET in the prod environment}"
+
+          encoded_password="$(python -c 'import os; from urllib.parse import quote; print(quote(os.environ["TF_DATABASE_PASSWORD"], safe=""))')"
+          database_url="postgresql+psycopg://platform:${encoded_password}@${DATABASE_PRIVATE_IP}:5432/agentops?sslmode=require"
+          redis_url="redis://${REDIS_HOST}:6379/0"
+
+          printf '%s' "$database_url" | gcloud secrets versions add agentops-database-url --data-file=-
+          printf '%s' "$redis_url" | gcloud secrets versions add agentops-redis-url --data-file=-
+          printf '%s' "$JWT_DEMO_SECRET" | gcloud secrets versions add agentops-jwt-secret --data-file=-
+          printf '%s' "$OIDC_ISSUER_URL" | gcloud secrets versions add agentops-oidc-issuer --data-file=-
+          printf '%s' "$OIDC_CLIENT_ID" | gcloud secrets versions add agentops-oidc-client-id --data-file=-
+          printf '%s' "$OIDC_CLIENT_SECRET" | gcloud secrets versions add agentops-oidc-client-secret --data-file=-
+
+          secret_env_file="$(mktemp)"
+          trap 'rm -f "$secret_env_file"' EXIT
+          printf 'DATABASE_URL=%s\nREDIS_URL=%s\nJWT_DEMO_SECRET=%s\nJWT_SECRET_KEY=%s\nOIDC_ISSUER_URL=%s\nOIDC_CLIENT_ID=%s\nOIDC_CLIENT_SECRET=%s\n' \
+            "$database_url" "$redis_url" "$JWT_DEMO_SECRET" "$JWT_DEMO_SECRET" \
+            "$OIDC_ISSUER_URL" "$OIDC_CLIENT_ID" "$OIDC_CLIENT_SECRET" > "$secret_env_file"
+          kubectl create secret generic platform-secrets \
+            --namespace "$GCP_NAMESPACE" \
+            --from-env-file="$secret_env_file" \
+            --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -148,7 +264,8 @@ jobs:
             --set global.environment=production \
             --set namespace="$GCP_NAMESPACE" \
             --set serviceAccount.name="$SERVICE_ACCOUNT_NAME" \
-            --set-string serviceAccount.annotations."iam.gke.io/gcp-service-account"="$SERVICE_ACCOUNT_NAME@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
+            --set migration.image.repository="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-api" \
+            --set migration.image.tag="$IMAGE_TAG" \
             --set api.image.repository="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-api" \
             --set api.image.tag="$IMAGE_TAG" \
             --set worker.image.repository="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-worker" \

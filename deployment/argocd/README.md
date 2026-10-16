@@ -10,14 +10,11 @@ This directory contains the Argo CD application project and the Helm-based GitOp
 - `environments/*.yaml`: concrete environment examples
 - `bootstrap/`: bootstrap installation manifest for the Argo CD control plane
 
-## Required update before apply
+## Repository
 
-Replace the placeholder repository URL with the actual GitHub repository that hosts this platform before applying the manifests:
-
-```yaml
-source:
-  repoURL: https://github.com/<your-org>/<your-repo>.git
-```
+The current production Application points at
+`https://github.com/rajmagarccp-2025/agentops.git`. Update it if the repository
+is renamed or moved.
 
 ## Apply order
 

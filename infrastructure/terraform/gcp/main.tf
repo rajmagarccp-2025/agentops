@@ -3,6 +3,10 @@ provider "google" {
   region  = var.region
 }
 
+data "google_project" "current" {
+  project_id = var.project_id
+}
+
 variable "project_id" {
   type = string
 }
@@ -51,6 +55,14 @@ resource "google_project_service" "required" {
     "redis.googleapis.com",
     "iam.googleapis.com",
     "servicenetworking.googleapis.com",
+    "aiplatform.googleapis.com",
+    "pubsub.googleapis.com",
+    "storage.googleapis.com",
+    "secretmanager.googleapis.com",
+    "cloudkms.googleapis.com",
+    "logging.googleapis.com",
+    "monitoring.googleapis.com",
+    "cloudtrace.googleapis.com",
   ])
 
   service            = each.value
@@ -134,16 +146,165 @@ resource "google_artifact_registry_repository" "platform" {
   depends_on = [google_project_service.required]
 }
 
+resource "google_project_iam_member" "gke_artifact_registry_reader" {
+  project = var.project_id
+  role    = "roles/artifactregistry.reader"
+  member  = "serviceAccount:${data.google_project.current.number}-compute@developer.gserviceaccount.com"
+}
+
+resource "google_storage_bucket" "artifacts" {
+  name                        = "${var.project_id}-agentops-artifacts"
+  location                    = "US"
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  force_destroy               = false
+
+  versioning {
+    enabled = true
+  }
+
+  labels = {
+    application = "agentops"
+    environment = var.environment
+    purpose     = "application-artifacts"
+  }
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_pubsub_topic" "events" {
+  name = "${var.project_name}-${var.environment}-events"
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_pubsub_topic" "dead_letter" {
+  name = "${var.project_name}-${var.environment}-events-dlq"
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_pubsub_subscription" "events" {
+  name  = "${var.project_name}-${var.environment}-events"
+  topic = google_pubsub_topic.events.id
+
+  ack_deadline_seconds       = 30
+  message_retention_duration = "604800s"
+
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.dead_letter.id
+    max_delivery_attempts = 5
+  }
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_kms_key_ring" "platform" {
+  name     = "${var.project_name}-${var.environment}"
+  location = var.region
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_kms_crypto_key" "platform" {
+  name            = "${var.project_name}-${var.environment}-application"
+  key_ring        = google_kms_key_ring.platform.id
+  rotation_period = "7776000s"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+locals {
+  platform_secret_ids = toset([
+    "agentops-database-url",
+    "agentops-redis-url",
+    "agentops-jwt-secret",
+    "agentops-oidc-issuer",
+    "agentops-oidc-client-id",
+    "agentops-oidc-client-secret",
+  ])
+}
+
+resource "google_secret_manager_secret" "platform" {
+  for_each  = local.platform_secret_ids
+  secret_id = each.value
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.required]
+}
+
 # GCP Service Account for Workload Identity
 resource "google_service_account" "platform" {
   account_id   = var.service_account_name
   display_name = "Platform Workload Identity SA"
+
+  depends_on = [google_project_service.required]
 }
 
 resource "google_service_account_iam_member" "workload_identity_user" {
   service_account_id = google_service_account.platform.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.namespace}/${var.service_account_name}]"
+}
+
+resource "google_storage_bucket_iam_member" "platform_object_user" {
+  bucket = google_storage_bucket.artifacts.name
+  role   = "roles/storage.objectUser"
+  member = "serviceAccount:${google_service_account.platform.email}"
+}
+
+resource "google_pubsub_topic_iam_member" "platform_events_publisher" {
+  topic  = google_pubsub_topic.events.name
+  role   = "roles/pubsub.publisher"
+  member = "serviceAccount:${google_service_account.platform.email}"
+}
+
+resource "google_pubsub_subscription_iam_member" "platform_events_subscriber" {
+  subscription = google_pubsub_subscription.events.name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:${google_service_account.platform.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "platform_secret_accessor" {
+  for_each  = google_secret_manager_secret.platform
+  secret_id = each.value.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.platform.email}"
+}
+
+resource "google_kms_crypto_key_iam_member" "platform_crypto_key_user" {
+  crypto_key_id = google_kms_crypto_key.platform.id
+  role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+  member        = "serviceAccount:${google_service_account.platform.email}"
+}
+
+resource "google_project_iam_member" "platform_vertex_user" {
+  project = var.project_id
+  role    = "roles/aiplatform.user"
+  member  = "serviceAccount:${google_service_account.platform.email}"
+}
+
+resource "google_project_iam_member" "platform_log_writer" {
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.platform.email}"
+}
+
+resource "google_project_iam_member" "platform_metric_writer" {
+  project = var.project_id
+  role    = "roles/monitoring.metricWriter"
+  member  = "serviceAccount:${google_service_account.platform.email}"
+}
+
+resource "google_project_iam_member" "platform_trace_agent" {
+  project = var.project_id
+  role    = "roles/cloudtrace.agent"
+  member  = "serviceAccount:${google_service_account.platform.email}"
 }
 
 # Memorystore Redis Instance
@@ -204,6 +365,11 @@ resource "google_sql_user" "platform" {
   password = var.database_password
 }
 
+resource "google_sql_database" "platform" {
+  name     = "agentops"
+  instance = google_sql_database_instance.platform.name
+}
+
 output "cluster_name" {
   value = google_container_cluster.platform.name
 }
@@ -216,7 +382,22 @@ output "redis_host" {
   value = google_redis_instance.platform.host
 }
 
+output "database_private_ip" {
+  value = google_sql_database_instance.platform.private_ip_address
+}
+
+output "artifact_bucket_name" {
+  value = google_storage_bucket.artifacts.name
+}
+
+output "pubsub_topic_name" {
+  value = google_pubsub_topic.events.name
+}
+
+output "kms_key_name" {
+  value = google_kms_crypto_key.platform.id
+}
+
 output "artifact_registry_repository" {
   value = google_artifact_registry_repository.platform.name
 }
-

@@ -50,7 +50,10 @@ secrets:
   data:
     databaseUrlKey: DATABASE_URL
     redisUrlKey: REDIS_URL
-    jwtSecretKey: JWT_SECRET_KEY
+    jwtSecretKey: JWT_DEMO_SECRET
+    oidcIssuerUrlKey: OIDC_ISSUER_URL
+    oidcClientIdKey: OIDC_CLIENT_ID
+    oidcClientSecretKey: OIDC_CLIENT_SECRET
 
 
 # Alembic PreSync Migration Job Configuration

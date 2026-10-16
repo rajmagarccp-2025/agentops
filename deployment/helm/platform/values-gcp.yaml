@@ -12,6 +12,7 @@ serviceAccount:
     iam.gke.io/gcp-service-account: "agentops-platform-sa-gcp@project-cks-aug2026.iam.gserviceaccount.com"
 
 ingress:
+  enabled: false
   className: gce
   annotations:
     kubernetes.io/ingress.class: "gce"
@@ -20,4 +21,7 @@ ingress:
 
 config:
   database:
-    sslMode: verify-ca
+    sslMode: require
+
+serviceMonitor:
+  enabled: false
