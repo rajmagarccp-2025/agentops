@@ -804,14 +804,9 @@ def invoke_chat_completion(
             api_key = secret_val_resp.value
         except Exception as exc:
             logger.warning(
-<<<<<<< HEAD
-                f"Could not resolve secret value for model {model.id}, "
-                f"falling back to adapter default: {exc}"
-=======
                 "Could not resolve secret for model %s; falling back to adapter default: %s",
                 model.id,
                 exc,
->>>>>>> ba111f424d5914bdfb86d71c9c5b059719ee8290
             )
 
     # 6. Select Provider Adapter & Execute

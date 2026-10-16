@@ -148,14 +148,10 @@ def _decode_token(token: str) -> dict[str, Any]:
 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-<<<<<<< HEAD
             detail=(
                 "Invalid or expired OIDC access token: "
                 f"{last_error or 'Keycloak JWKS resolution failed'}"
             ),
-=======
-            detail="Invalid or expired OIDC access token: Keycloak JWKS resolution failed",
->>>>>>> ba111f424d5914bdfb86d71c9c5b059719ee8290
             headers={"WWW-Authenticate": "Bearer"},
         ) from None
 
