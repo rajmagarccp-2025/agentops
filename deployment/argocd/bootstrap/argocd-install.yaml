@@ -3,15 +3,6 @@ kind: Namespace
 metadata:
   name: argocd
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: argocd-secret
-  namespace: argocd
-type: Opaque
-stringData:
-  admin.password: "$2a$10$Q9Q1F5xjL9Zs1V3K8mn8gO1rR5YcL9m6u3O5lq9y2ChbP4Ew4U9G2"
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,11 +21,32 @@ spec:
       containers:
         - name: argocd-server
           image: quay.io/argoproj/argocd:v2.13.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - argocd-server
+            - --insecure
           ports:
-            - containerPort: 8080
-          env:
-            - name: ARGOCD_ADMIN_PASSWORD
-              value: "$2a$10$Q9Q1F5xjL9Zs1V3K8mn8gO1rR5YcL9m6u3O5lq9y2ChbP4Ew4U9G2"
+            - name: https
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+            initialDelaySeconds: 30
+            periodSeconds: 20
 ---
 apiVersion: v1
 kind: Service

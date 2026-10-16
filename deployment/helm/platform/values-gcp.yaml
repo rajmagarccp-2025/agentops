@@ -1,17 +1,22 @@
 global:
+  environment: production
   cloudProvider: gcp
+  clusterDomain: cluster.local
+
+namespace: platform-prod
 
 serviceAccount:
   create: true
   name: platform-sa-gcp
   annotations:
-    iam.gke.io/gcp-service-account: "platform-sa@PROJECT_ID.iam.gserviceaccount.com"
+    iam.gke.io/gcp-service-account: "platform-sa-gcp@PROJECT_ID.iam.gserviceaccount.com"
 
 ingress:
   className: gce
   annotations:
     kubernetes.io/ingress.class: "gce"
-    ingress.gcp.kubernetes.io/pre-shared-cert: "platform-cert"
+    kubernetes.io/ingress.allow-http: "false"
+    networking.gke.io/managed-certificates: "platform-cert"
 
 config:
   database:

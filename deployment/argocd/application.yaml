@@ -8,15 +8,20 @@ metadata:
 spec:
   project: platform-project
   source:
-    repoURL: 'https://github.com/org/platform-repo.git'
+    repoURL: https://github.com/<your-org>/<your-repo>.git
     targetRevision: main
     path: deployment/helm/platform
     helm:
       valueFiles:
         - values.yaml
         - values-gcp.yaml
+      parameters:
+        - name: global.environment
+          value: production
+        - name: namespace
+          value: platform-prod
   destination:
-    server: 'https://kubernetes.default.svc'
+    server: https://kubernetes.default.svc
     namespace: platform-prod
   syncPolicy:
     automated:
@@ -26,6 +31,7 @@ spec:
       - CreateNamespace=true
       - ApplyOutOfSyncOnly=true
       - PruneLast=true
+      - ServerSideApply=true
     retry:
       limit: 5
       backoff:

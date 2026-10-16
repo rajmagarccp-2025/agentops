@@ -25,15 +25,20 @@ spec:
     spec:
       project: platform-project
       source:
-        repoURL: 'https://github.com/org/platform-repo.git'
+        repoURL: https://github.com/<your-org>/<your-repo>.git
         targetRevision: main
         path: deployment/helm/platform
         helm:
           valueFiles:
             - values.yaml
             - '{{valuesFile}}'
+          parameters:
+            - name: global.environment
+              value: '{{env}}'
+            - name: namespace
+              value: '{{namespace}}'
       destination:
-        server: 'https://kubernetes.default.svc'
+        server: https://kubernetes.default.svc
         namespace: '{{namespace}}'
       syncPolicy:
         automated:
@@ -41,3 +46,4 @@ spec:
           selfHeal: true
         syncOptions:
           - CreateNamespace=true
+          - ServerSideApply=true

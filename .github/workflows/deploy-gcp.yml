@@ -1,0 +1,103 @@
+name: Deploy to GCP
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: dev
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      image_tag:
+        description: Container image tag to deploy
+        required: true
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-push:
+    name: Build and push container images
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      GAR_LOCATION: us-central1
+      GAR_REPOSITORY: agentic-platform-${{ inputs.environment }}
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "$GAR_LOCATION-docker.pkg.dev" --quiet
+
+      - name: Build and push API image
+        run: |
+          docker build -t "$GAR_LOCATION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/platform-api:$IMAGE_TAG" -f docker/backend.Dockerfile .
+          docker push "$GAR_LOCATION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/platform-api:$IMAGE_TAG"
+
+      - name: Build and push worker image
+        run: |
+          docker build -t "$GAR_LOCATION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/platform-worker:$IMAGE_TAG" -f docker/worker.Dockerfile .
+          docker push "$GAR_LOCATION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/platform-worker:$IMAGE_TAG"
+
+      - name: Build and push frontend image
+        run: |
+          docker build -t "$GAR_LOCATION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/platform-frontend:$IMAGE_TAG" -f docker/frontend.Dockerfile .
+          docker push "$GAR_LOCATION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/platform-frontend:$IMAGE_TAG"
+
+  deploy:
+    name: Deploy to GKE
+    needs: build-push
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Get cluster credentials
+        run: |
+          gcloud container clusters get-credentials "agentic-platform-${{ inputs.environment }}" \
+            --region us-central1 \
+            --project "${{ secrets.GCP_PROJECT_ID }}"
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Deploy chart
+        run: |
+          helm upgrade --install platform deployment/helm/platform \
+            --namespace platform-${{ inputs.environment }} \
+            --create-namespace \
+            --values deployment/helm/platform/values-gcp.yaml \
+            --set global.environment=${{ inputs.environment }} \
+            --set api.image.tag=${{ inputs.image_tag }} \
+            --set worker.image.tag=${{ inputs.image_tag }} \
+            --set frontend.image.tag=${{ inputs.image_tag }} \
+            --wait --timeout 10m

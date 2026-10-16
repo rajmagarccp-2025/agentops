@@ -6,15 +6,15 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  description: AppProject for Cloud-Agnostic Agentic SRE, FinOps & LLMOps Platform
+  description: GitOps project for the cloud-agnostic Agentic SRE, FinOps, and LLMOps platform
   sourceRepos:
     - '*'
   destinations:
-    - namespace: platform-prod
+    - namespace: platform-dev
       server: https://kubernetes.default.svc
     - namespace: platform-staging
       server: https://kubernetes.default.svc
-    - namespace: platform-dev
+    - namespace: platform-prod
       server: https://kubernetes.default.svc
   clusterResourceWhitelist:
     - group: '*'
@@ -22,3 +22,4 @@ spec:
   namespaceResourceWhitelist:
     - group: '*'
       kind: '*'
+  syncWindows: []

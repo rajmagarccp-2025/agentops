@@ -1,6 +1,6 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from platform_api.config import get_settings
@@ -65,6 +65,45 @@ engine = create_app_engine()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
 
+def _ensure_missing_columns() -> None:
+    with engine.begin() as conn:
+        inspector = inspect(conn)
+        for table in Base.metadata.sorted_tables:
+            table_name = table.name
+            if not inspector.has_table(table_name):
+                continue
+            existing_cols = {col["name"] for col in inspector.get_columns(table_name)}
+            for column in table.columns:
+                if column.name in existing_cols:
+                    continue
+                column_type = column.type.compile(dialect=engine.dialect)
+                stmt = f"ALTER TABLE {table_name} ADD COLUMN {column.name} {column_type}"
+                conn.execute(text(stmt))
+
+
+def _ensure_audit_append_only_triggers() -> None:
+    if engine.dialect.name != "sqlite":
+        return
+    with engine.begin() as conn:
+        trigger_names = {
+            row[0]
+            for row in conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name IN ('audit_logs', 'audit_log_archive')")
+            ).fetchall()
+        }
+        for table in ("audit_logs", "audit_log_archive"):
+            for action in ("no_update", "no_delete"):
+                trigger_name = f"{table}_{action}"
+                if trigger_name in trigger_names:
+                    continue
+                conn.execute(
+                    text(
+                        f"CREATE TRIGGER {trigger_name} BEFORE {'UPDATE' if action == 'no_update' else 'DELETE'} "
+                        f"ON {table} BEGIN SELECT RAISE(ABORT, 'audit log tables are append-only'); END"
+                    )
+                )
+
+
 def init_db() -> None:
     try:
         import platform_api.identity_models  # noqa
@@ -85,8 +124,9 @@ def init_db() -> None:
         import platform_api.workflow_queue  # noqa
 
         Base.metadata.create_all(bind=engine)
+        _ensure_missing_columns()
+        _ensure_audit_append_only_triggers()
 
-        from sqlalchemy import inspect
         with engine.begin() as conn:
             inspector = inspect(conn)
             if "llm_requests" in inspector.get_table_names():
