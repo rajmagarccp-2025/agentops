@@ -1,0 +1,14 @@
+global:
+  cloudProvider: aws
+
+serviceAccount:
+  create: true
+  name: platform-sa-aws
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT_ID:role/platform-eks-role"
+
+ingress:
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip

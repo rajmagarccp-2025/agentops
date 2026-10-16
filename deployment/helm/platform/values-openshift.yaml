@@ -1,0 +1,17 @@
+global:
+  cloudProvider: openshift
+
+securityContext:
+  pod:
+    runAsNonRoot: true
+    runAsUser: null
+    runAsGroup: null
+    fsGroup: null
+  container:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: false
+
+ingress:
+  className: openshift-default
+  annotations:
+    route.openshift.io/termination: "edge"

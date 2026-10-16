@@ -1,0 +1,5 @@
+project_id = "replace-with-gcp-project-id"
+project_name = "agentic-platform"
+environment = "dev"
+region = "us-central1"
+database_password = "set-through-a-secret-manager-or-tfvars-not-source-control"

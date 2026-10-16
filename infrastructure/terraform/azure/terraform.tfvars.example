@@ -1,0 +1,4 @@
+project_name = "agentic-platform"
+environment = "dev"
+location = "eastus"
+database_password = "set-through-a-secret-manager-or-tfvars-not-source-control"

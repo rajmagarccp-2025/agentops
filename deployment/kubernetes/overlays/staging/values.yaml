@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+  namespace: agentic-platform-staging
+data:
+  APP_ENV: staging
+  LOG_LEVEL: INFO
+  DEMO_MODE: "false"
+  OTEL_SERVICE_NAME: agentic-platform-api
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  REDIS_URL: redis://redis:6379/0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-api
+  namespace: agentic-platform-staging
+spec:
+  replicas: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-web
+  namespace: agentic-platform-staging
+spec:
+  replicas: 2

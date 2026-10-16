@@ -1,0 +1,211 @@
+name: platform-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-platform}
+      POSTGRES_USER: ${POSTGRES_USER:-platform}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-platform}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-platform} -d ${POSTGRES_DB:-platform}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - platform-network
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel notice
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - platform-network
+
+  s3server:
+    image: scality/s3server:latest
+    restart: unless-stopped
+    ports:
+      - "9000:8000"
+    volumes:
+      - s3_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8000 || exit 0"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - platform-network
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://platform:platform@postgres:5432/platform}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://s3server:8000}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-accessKey1}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-verySecretKey1}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-platform-artifacts}
+      JWT_DEMO_SECRET: ${JWT_DEMO_SECRET:-local-demo-secret-change-me-32-bytes}
+      DEMO_MODE: ${DEMO_MODE:-true}
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-http://localhost:8080/realms/agentops}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-agentops-api}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-agentops-web}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      s3server:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - platform-network
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://platform:platform@postgres:5432/platform}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://s3server:8000}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-accessKey1}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-verySecretKey1}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-platform-artifacts}
+      JWT_DEMO_SECRET: ${JWT_DEMO_SECRET:-local-demo-secret-change-me-32-bytes}
+      DEMO_MODE: ${DEMO_MODE:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - platform-network
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    restart: unless-stopped
+    environment:
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
+      INTERNAL_API_BASE_URL: ${INTERNAL_API_BASE_URL:-http://api:8000/api/v1}
+      KEYCLOAK_BASE_URL: ${KEYCLOAK_BASE_URL:-http://localhost:8080}
+      INTERNAL_KEYCLOAK_URL: ${INTERNAL_KEYCLOAK_URL:-http://keycloak:8080}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-agentops}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-agentops-web}
+      NEXTAUTH_REDIRECT_URI: ${NEXTAUTH_REDIRECT_URI:-http://localhost:3000/api/auth/callback}
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - platform-network
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_PORT: "5432"
+      KC_DB_URL_DATABASE: ${KC_DB_DATABASE:-keycloak}
+      KC_DB_USERNAME: ${POSTGRES_USER:-platform}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-platform}
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - ./deployment/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c \"exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'\""]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 180s
+    networks:
+      - platform-network
+
+  kong:
+    image: kong:3.4
+    restart: unless-stopped
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_LISTEN: "0.0.0.0:8001"
+      KONG_PROXY_LISTEN: "0.0.0.0:8000"
+    volumes:
+      - ./deployment/kong/kong.yml:/etc/kong/kong.yml:ro
+    ports:
+      - "8002:8000"
+      - "8003:8001"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - platform-network
+
+
+networks:
+  platform-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  s3_data:

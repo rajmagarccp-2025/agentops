@@ -1,0 +1,43 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: platform-multi-cloud
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - env: dev
+            cloud: gcp
+            valuesFile: values-gcp.yaml
+            namespace: platform-dev
+          - env: staging
+            cloud: gcp
+            valuesFile: values-gcp.yaml
+            namespace: platform-staging
+          - env: production
+            cloud: gcp
+            valuesFile: values-gcp.yaml
+            namespace: platform-prod
+  template:
+    metadata:
+      name: 'platform-{{env}}-{{cloud}}'
+    spec:
+      project: platform-project
+      source:
+        repoURL: 'https://github.com/org/platform-repo.git'
+        targetRevision: main
+        path: deployment/helm/platform
+        helm:
+          valueFiles:
+            - values.yaml
+            - '{{valuesFile}}'
+      destination:
+        server: 'https://kubernetes.default.svc'
+        namespace: '{{namespace}}'
+      syncPolicy:
+        automated:
+          prune: false
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

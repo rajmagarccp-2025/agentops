@@ -1,0 +1,5 @@
+aws_region = "us-east-1"
+project_name = "agentic-platform"
+environment = "dev"
+database_password = "set-through-a-secret-manager-or-tfvars-not-source-control"
+database_deletion_protection = true

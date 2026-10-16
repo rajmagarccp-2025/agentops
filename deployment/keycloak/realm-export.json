@@ -1,0 +1,373 @@
+{
+  "id": "agentops",
+  "realm": "agentops",
+  "displayName": "AgentOps Identity Realm",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "ADMIN",
+        "description": "Enterprise Organization, Project, and Environment Administrator"
+      },
+      {
+        "name": "WRITE",
+        "description": "Read and Write access for operations, telemetry, and execution"
+      },
+      {
+        "name": "READ",
+        "description": "Read-only access across platform domains"
+      },
+      {
+        "name": "platform-admin",
+        "description": "Full enterprise governance and administrator control"
+      },
+      {
+        "name": "operator",
+        "description": "SRE Incident responder and operator"
+      },
+      {
+        "name": "developer",
+        "description": "Developer with read and propose capabilities"
+      },
+      {
+        "name": "viewer",
+        "description": "Read-only access across platform domains"
+      }
+    ]
+  },
+  "clientScopes": [
+    {
+      "name": "platform-api-audience",
+      "description": "Adds platform API audience to tokens",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "agentops-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "tenant-membership-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "tenant_memberships",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "tenant_memberships",
+            "jsonType.label": "JSON"
+          }
+        },
+        {
+          "name": "tenant-id-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "tenant_id",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "tenant_id",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "roles",
+      "description": "OpenID Connect scope for user roles",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "client roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-client-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "claim.name": "resource_access.${client_id}.roles",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "email",
+      "description": "OpenID Connect built-in scope: email",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "email",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "email",
+            "claim.name": "email",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "email verified",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "emailVerified",
+            "claim.name": "email_verified",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "jsonType.label": "boolean"
+          }
+        }
+      ]
+    },
+    {
+      "name": "profile",
+      "description": "OpenID Connect built-in scope: profile",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "username",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "username",
+            "claim.name": "preferred_username",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "full name",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-full-name-mapper",
+          "consentRequired": false,
+          "config": {
+            "id.token.claim": "true",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "web-origins",
+      "description": "OpenID Connect scope for allowed web origins",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "allowed web origins",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-allowed-origins-mapper",
+          "consentRequired": false,
+          "config": {
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "platform-permissions",
+      "description": "Platform granular permissions scope",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "true"
+      }
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "agentops-web",
+      "name": "AgentOps Web Frontend (OIDC PKCE)",
+      "enabled": true,
+      "publicClient": true,
+      "clientAuthenticatorType": "client-secret",
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000##http://localhost:3000/login##http://localhost:3000/",
+        "access.token.lifespan": "1800"
+      },
+      "redirectUris": [
+        "http://localhost:3000/auth/callback",
+        "http://localhost:3000/api/auth/callback",
+        "http://localhost:3000"
+      ],
+      "webOrigins": [
+        "http://localhost:3000",
+        "+"
+      ],
+      "defaultClientScopes": [
+        "web-origins",
+        "role_list",
+        "profile",
+        "roles",
+        "email",
+        "platform-api-audience",
+        "platform-permissions"
+      ]
+    },
+    {
+      "clientId": "platform-frontend",
+      "name": "Platform Web Frontend (BFF & SPA)",
+      "enabled": true,
+      "publicClient": true,
+      "clientAuthenticatorType": "client-secret",
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:3000##http://localhost:3000/login##http://localhost:3000/",
+        "access.token.lifespan": "1800"
+      },
+      "redirectUris": [
+        "http://localhost:3000/auth/callback",
+        "http://localhost:3000/api/auth/callback",
+        "http://localhost:3000"
+      ],
+      "webOrigins": [
+        "http://localhost:3000",
+        "+"
+      ],
+      "defaultClientScopes": [
+        "web-origins",
+        "role_list",
+        "profile",
+        "roles",
+        "email",
+        "platform-api-audience",
+        "platform-permissions"
+      ]
+    },
+    {
+      "clientId": "agentops-api",
+      "name": "AgentOps Backend API",
+      "enabled": true,
+      "bearerOnly": true,
+      "protocol": "openid-connect"
+    },
+    {
+      "clientId": "platform-api",
+      "name": "Platform Backend API",
+      "enabled": true,
+      "bearerOnly": true,
+      "protocol": "openid-connect"
+    }
+  ],
+  "users": [
+    {
+      "username": "alex.rivera",
+      "email": "alex.rivera@enterprise.com",
+      "firstName": "Alex",
+      "lastName": "Rivera",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "EnterprisePassword123!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "platform-admin",
+        "operator",
+        "ADMIN"
+      ],
+      "attributes": {
+        "tenant_id": ["northstar-production"],
+        "tenant_memberships": [
+          "[{\"tenant_id\": \"northstar-production\", \"roles\": [\"platform-admin\", \"operator\", \"ADMIN\"]}, {\"tenant_id\": \"fintech-staging\", \"roles\": [\"developer\"]}]"
+        ]
+      }
+    },
+    {
+      "username": "dev.operator",
+      "email": "operator@enterprise.com",
+      "firstName": "Dev",
+      "lastName": "Operator",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "OperatorPassword123!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "operator",
+        "WRITE"
+      ],
+      "attributes": {
+        "tenant_id": ["fintech-staging"],
+        "tenant_memberships": [
+          "[{\"tenant_id\": \"fintech-staging\", \"roles\": [\"operator\", \"WRITE\"]}]"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentic-platform-dev
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: agentic-platform-dev
+  namespace: argocd
+spec:
+  project: agentic-platform
+  source:
+    repoURL: https://github.com/example/platform.git
+    targetRevision: develop
+    path: deployment/helm/platform
+    helm:
+      valueFiles:
+        - values.yaml
+      parameters:
+        - name: namespace
+          value: agentic-platform-dev
+        - name: global.environment
+          value: development
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: agentic-platform-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

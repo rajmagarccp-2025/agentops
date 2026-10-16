@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: release-baseline
+  namespace: agentic-platform-staging
+data:
+  release_channel: staging
+  promoted_from: dev
+  release_revision: main
+  maintenance_window: "false"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: application-release-lock
+  namespace: agentic-platform-staging
+data:
+  promotion_guard: "automated-checks-required"
+  last_verified_commit: "unknown"

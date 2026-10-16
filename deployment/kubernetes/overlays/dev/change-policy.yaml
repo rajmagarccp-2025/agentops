@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: change-policy
+  namespace: agentic-platform-dev
+data:
+  policy_name: dev-release-gate
+  change_type: rollout
+  require_manual_approval: "false"
+  require_release_lock_ack: "false"
+  require_health_check: "false"
+  max_parallel_replicas: "1"
+  rollback_window_minutes: "10"
+  escalation_contact: devops@example.com
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promotion-approval
+  namespace: agentic-platform-dev
+data:
+  approved_by: "developer"
+  approval_status: approved
+  approval_reason: "Developer change, no additional gate required."
+  approved_at: "1970-01-01T00:00:00Z"

@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: change-policy
+  namespace: agentic-platform-prod
+data:
+  policy_name: production-release-gate
+  change_type: rollout
+  require_manual_approval: "true"
+  require_release_lock_ack: "true"
+  require_health_check: "true"
+  max_parallel_replicas: "2"
+  rollback_window_minutes: "30"
+  escalation_contact: ops@example.com
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promotion-approval
+  namespace: agentic-platform-prod
+data:
+  approved_by: "release-manager"
+  approval_status: pending
+  approval_reason: "Production rollout requires approved change window and verified health."
+  approved_at: "1970-01-01T00:00:00Z"

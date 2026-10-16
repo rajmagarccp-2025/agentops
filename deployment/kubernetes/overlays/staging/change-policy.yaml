@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: change-policy
+  namespace: agentic-platform-staging
+data:
+  policy_name: staging-release-gate
+  change_type: rollout
+  require_manual_approval: "false"
+  require_release_lock_ack: "true"
+  require_health_check: "true"
+  max_parallel_replicas: "1"
+  rollback_window_minutes: "15"
+  escalation_contact: ops@example.com
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promotion-approval
+  namespace: agentic-platform-staging
+data:
+  approved_by: "platform-ops"
+  approval_status: approved
+  approval_reason: "Staging release passes validation and health checks."
+  approved_at: "1970-01-01T00:00:00Z"

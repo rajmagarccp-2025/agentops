@@ -1,0 +1,13 @@
+global:
+  cloudProvider: azure
+
+serviceAccount:
+  create: true
+  name: platform-sa-azure
+  annotations:
+    azure.workload.identity/client-id: "00000000-0000-0000-0000-000000000000"
+
+ingress:
+  className: azure-application-gateway
+  annotations:
+    appgw.ingress.k8s.io/ssl-redirect: "true"

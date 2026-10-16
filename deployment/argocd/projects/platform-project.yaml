@@ -1,0 +1,37 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: agentic-platform
+  namespace: argocd
+spec:
+  description: Agentic platform delivery project
+  sourceRepos:
+    - '*'
+  destinations:
+    - namespace: agentic-platform
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: ''
+      kinds:
+        - ConfigMap
+        - Secret
+        - Service
+        - ServiceAccount
+    - group: apps
+      kinds:
+        - Deployment
+        - StatefulSet
+        - DaemonSet
+    - group: autoscaling
+      kinds:
+        - HorizontalPodAutoscaler
+    - group: networking.k8s.io
+      kinds:
+        - NetworkPolicy
+    - group: policy
+      kinds:
+        - PodDisruptionBudget
+  syncWindows: []

@@ -1,0 +1,47 @@
+_format_version: "3.0"
+
+services:
+  - name: fastapi-service
+    url: http://api:8000/api/v1
+    routes:
+      - name: fastapi-route
+        paths:
+          - /api/v1
+        strip_path: true
+        protocols:
+          - http
+          - https
+        plugins:
+          - name: jwt
+            config:
+              uri_param_names: []
+              cookie_names: []
+              header_names:
+                - authorization
+              claims_to_verify:
+                - exp
+              key_claim_name: iss
+              secret_is_base64: false
+
+consumers:
+  - username: keycloak-platform-realm
+    custom_id: platform-realm-consumer
+    jwt_secrets:
+      # Keycloak / OIDC issuer credentials verified by Kong
+      - key: http://localhost:8080/realms/platform
+        algorithm: RS256
+        rsa_public_key: |
+          -----BEGIN PUBLIC KEY-----
+          MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0Gl1E0J7IZUDRTSOw7co
+          O0rQG8KlOmwIaPe9zw2D2T7YLy8IMqp7LvmGQfFSaeVuOUXkoOZdKoaBmB0utB5C
+          zEdqcxFepHEvZ9drUIr+/RA76daMxRm42OqweCTdX/z64KYBqQKtb2uT5j7YwHJz
+          oqyhlfP0lpZnPFgFkkat1u7tIHi10sXzHHfcpRNF8G++J1+e/MyqT+K0QpO9pq7c
+          RK4ISigwR7F4Emb+Y0eVcfOxs6ZK4GGjNJECrMMjnwmsTcxETJBfxMZPxEfM7aCy
+          u18rWXkTcfv1QSkCxqhgKZSrpLT9A0kNxOFRLaKFKuBxRqj67rlLPnJxwZogMYTF
+          pQIDAQAB
+          -----END PUBLIC KEY-----
+
+      # Local gateway issuer credentials for development testing
+      - key: agentic-platform
+        algorithm: HS256
+        secret: local-demo-secret-change-me-32-bytes

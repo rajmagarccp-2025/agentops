@@ -1,0 +1,41 @@
+# Environment & Local Configuration
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+*.pyc
+
+# Next.js & Build Artifacts
+frontend/.next/
+dist/
+build/
+coverage/
+*.egg-info/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+
+# Logs
+*.log
+
+# IDE & OS Artifacts
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets
+*.pem
+*.key
+secrets.yaml

@@ -1,0 +1,207 @@
+global:
+  environment: production
+  cloudProvider: generic
+  clusterDomain: cluster.local
+
+namespace: platform-prod
+
+serviceAccount:
+  create: true
+  name: platform-sa
+  annotations: {}
+
+securityContext:
+  pod:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  container:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+
+config:
+  logLevel: INFO
+  allowedHosts: "*"
+  corsOrigins: "*"
+  database:
+    maxConnections: 20
+    sslMode: prefer
+  redis:
+    maxConnections: 50
+
+# Database and Redis external secret / config references
+secrets:
+  secretName: platform-secrets
+  createSecret: false
+  externalSecretRef:
+    enabled: false
+    secretStoreRef: "platform-secret-store"
+    remoteKeys:
+      databaseUrl: "platform/database-url"
+      redisUrl: "platform/redis-url"
+      jwtSecret: "platform/jwt-secret"
+  data:
+    databaseUrlKey: DATABASE_URL
+    redisUrlKey: REDIS_URL
+    jwtSecretKey: JWT_SECRET_KEY
+
+
+# Alembic PreSync Migration Job Configuration
+migration:
+  enabled: true
+  image:
+    repository: platform-backend
+    tag: 1.0.0
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+
+# API Component Configuration
+api:
+  replicaCount: 3
+  image:
+    repository: platform-api
+    tag: 1.0.0
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  probes:
+    startup:
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      failureThreshold: 10
+    liveness:
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+    readiness:
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  pdb:
+    enabled: true
+    minAvailable: 2
+
+# Async Worker Component Configuration
+worker:
+  replicaCount: 2
+  image:
+    repository: platform-worker
+    tag: 1.0.0
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 85
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# Frontend Component Configuration
+frontend:
+  replicaCount: 2
+  image:
+    repository: platform-frontend
+    tag: 1.0.0
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 3000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  probes:
+    liveness:
+      initialDelaySeconds: 10
+      periodSeconds: 10
+    readiness:
+      initialDelaySeconds: 5
+      periodSeconds: 5
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+# Ingress Configuration
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: platform.example.com
+      paths:
+        - path: /api
+          pathType: Prefix
+          backend: api
+        - path: /
+          pathType: Prefix
+          backend: frontend
+  tls:
+    - secretName: platform-tls
+      hosts:
+        - platform.example.com
+
+# Network Policies Configuration
+networkPolicy:
+  enabled: true
+  ingress:
+    allowFromIngressController: true
+
+# Prometheus ServiceMonitor Configuration
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  path: /metrics
+  labels:
+    release: prometheus-stack

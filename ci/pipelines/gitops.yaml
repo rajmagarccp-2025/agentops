@@ -1,0 +1,20 @@
+trigger:
+  - main
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.12'
+  - script: |
+      python -m pip install --upgrade pip
+      pip install -e ./backend[dev]
+      python -m pytest backend/tests -q
+      kubectl kustomize deployment/kubernetes > /tmp/rendered.yaml
+    displayName: Validate backend and manifests
+  - script: |
+      echo "GitOps sync is externalized to Argo CD; manifest validation is enforced here."
+    displayName: Gate deployment lifecycle
