@@ -409,7 +409,10 @@ async def delete_environment(
     if env.type == "Production" and confirm_production_environment != env.slug:
         raise HTTPException(
             status_code=status.HTTP_428_PRECONDITION_REQUIRED,
-            detail="Production deletion requires the X-Confirm-Production-Environment header to match the environment slug.",
+            detail=(
+                "Production deletion requires the X-Confirm-Production-Environment "
+                "header to match the environment slug."
+            ),
         )
 
     AuditLogRepository().record_event(

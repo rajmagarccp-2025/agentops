@@ -22,7 +22,7 @@ async def get_onboarding_status(
     principal: Annotated[Principal, Depends(get_optional_tenant_principal)],
     db: Annotated[Session, Depends(get_db)],
 ) -> dict[str, Any]:
-    """Check whether authenticated user has active organization memberships or pending invitations."""
+    """Check for active organization memberships or pending invitations."""
     # Ensure user is synced
     user = MembershipRepository().create_or_sync_user(
         db,

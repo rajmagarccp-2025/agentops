@@ -88,7 +88,10 @@ def _ensure_audit_append_only_triggers() -> None:
         trigger_names = {
             row[0]
             for row in conn.execute(
-                text("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name IN ('audit_logs', 'audit_log_archive')")
+                text(
+                    "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                    "AND tbl_name IN ('audit_logs', 'audit_log_archive')"
+                )
             ).fetchall()
         }
         for table in ("audit_logs", "audit_log_archive"):
@@ -98,8 +101,10 @@ def _ensure_audit_append_only_triggers() -> None:
                     continue
                 conn.execute(
                     text(
-                        f"CREATE TRIGGER {trigger_name} BEFORE {'UPDATE' if action == 'no_update' else 'DELETE'} "
-                        f"ON {table} BEGIN SELECT RAISE(ABORT, 'audit log tables are append-only'); END"
+                        f"CREATE TRIGGER {trigger_name} BEFORE "
+                        f"{'UPDATE' if action == 'no_update' else 'DELETE'} "
+                        f"ON {table} BEGIN SELECT RAISE(ABORT, "
+                        "'audit log tables are append-only'); END"
                     )
                 )
 

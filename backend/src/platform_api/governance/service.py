@@ -51,12 +51,14 @@ def reauthorize_execution(
     # 1. Tenant Authorization & Exact Action Binding Check
     if approval.tenant_id != expected_tenant_id:
         raise ValueError(
-            f"Execution reauthorization DENIED: Tenant mismatch ({approval.tenant_id} != {expected_tenant_id})"
+            "Execution reauthorization DENIED: Tenant mismatch "
+            f"({approval.tenant_id} != {expected_tenant_id})"
         )
 
     if approval.action != expected_action:
         raise ValueError(
-            f"Execution reauthorization DENIED: Action mismatch ({approval.action} != {expected_action})"
+            "Execution reauthorization DENIED: Action mismatch "
+            f"({approval.action} != {expected_action})"
         )
 
     if approval.affected_resources != expected_resources:
@@ -81,13 +83,15 @@ def reauthorize_execution(
     # 2. Evidence Sufficiency Check
     if current_evidence_count < approval.required_evidence_count:
         raise ValueError(
-            f"Execution reauthorization DENIED: Insufficient evidence ({current_evidence_count} < {approval.required_evidence_count})"
+            "Execution reauthorization DENIED: Insufficient evidence "
+            f"({current_evidence_count} < {approval.required_evidence_count})"
         )
 
     # 3. Status, Expiry, and Replay Single-Use Checks
     if approval.status != ApprovalStatus.APPROVED:
         raise ValueError(
-            f"Execution reauthorization DENIED: Approval status is {approval.status.value}, expected APPROVED"
+            "Execution reauthorization DENIED: Approval status is "
+            f"{approval.status.value}, expected APPROVED"
         )
 
     if approval.consumed:

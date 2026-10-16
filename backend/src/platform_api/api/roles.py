@@ -11,10 +11,22 @@ router = APIRouter(prefix="/roles", tags=["roles"])
 async def list_roles() -> list[dict[str, Any]]:
     """Return available system roles and their assigned permission sets."""
     role_descriptions = {
-        "ADMIN": "Full administrative control over Organization, Projects, Environments, and Member management.",
-        "WRITE": "Read and Write access for operations, telemetry ingestion, actions, and AI queries. Cannot manage members.",
-        "READ": "Strict read-only access across platform domains. Prohibited from mutating data or submitting AI queries.",
-        "OWNER": "Organization owner with ownership transfer capabilities and full administrative control.",
+        "ADMIN": (
+            "Full administrative control over Organization, Projects, Environments, "
+            "and Member management."
+        ),
+        "WRITE": (
+            "Read and Write access for operations, telemetry ingestion, actions, and AI "
+            "queries. Cannot manage members."
+        ),
+        "READ": (
+            "Strict read-only access across platform domains. Prohibited from mutating "
+            "data or submitting AI queries."
+        ),
+        "OWNER": (
+            "Organization owner with ownership transfer capabilities and full "
+            "administrative control."
+        ),
     }
     return [
         {

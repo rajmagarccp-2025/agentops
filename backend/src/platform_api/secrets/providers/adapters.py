@@ -109,7 +109,10 @@ class AWSSecretsManagerAdapter(BaseSecretProviderAdapter):
             )
             return ConnectionTestResult(
                 success=True,
-                message=f"AWS Secrets Manager connection verified for region '{region}', KMS '{vault_id}' via Workload Identity / IAM Role.",
+                message=(
+                    f"AWS Secrets Manager connection verified for region '{region}', "
+                    f"KMS '{vault_id}' via Workload Identity / IAM Role."
+                ),
                 capabilities=self.get_capabilities(),
                 last_validated_at=datetime.now(UTC).isoformat(),
             )
@@ -123,7 +126,10 @@ class AWSSecretsManagerAdapter(BaseSecretProviderAdapter):
     def create_secret(
         self, secret_name: str, value: str, metadata: dict[str, Any] | None = None
     ) -> tuple[str | None, str | None, dict[str, Any]]:
-        ref = f"arn:aws:secretsmanager:{getattr(self.config, 'region', 'us-east-1')}:123456789012:secret:{secret_name}-v1"
+        ref = (
+            f"arn:aws:secretsmanager:{getattr(self.config, 'region', 'us-east-1')}:"
+            f"123456789012:secret:{secret_name}-v1"
+        )
         return (ref, None, {"provider": "aws_secrets_manager", "arn": ref})
 
     def read_secret_value(
@@ -141,14 +147,20 @@ class AWSSecretsManagerAdapter(BaseSecretProviderAdapter):
         self, secret_name: str, value: str, version_ref: str | None = None
     ) -> tuple[str | None, str | None, dict[str, Any]]:
         vnum = secrets.token_hex(4)
-        ref = f"arn:aws:secretsmanager:{getattr(self.config, 'region', 'us-east-1')}:123456789012:secret:{secret_name}-v{vnum}"
+        ref = (
+            f"arn:aws:secretsmanager:{getattr(self.config, 'region', 'us-east-1')}:"
+            f"123456789012:secret:{secret_name}-v{vnum}"
+        )
         return (ref, None, {"provider": "aws_secrets_manager", "arn": ref})
 
     def rotate_secret(
         self, secret_name: str, current_version_ref: str | None = None
     ) -> tuple[str | None, str | None, dict[str, Any]]:
         vnum = secrets.token_hex(4)
-        ref = f"arn:aws:secretsmanager:{getattr(self.config, 'region', 'us-east-1')}:123456789012:secret:{secret_name}-rotated-{vnum}"
+        ref = (
+            f"arn:aws:secretsmanager:{getattr(self.config, 'region', 'us-east-1')}:"
+            f"123456789012:secret:{secret_name}-rotated-{vnum}"
+        )
         return (ref, None, {"provider": "aws_secrets_manager", "arn": ref})
 
     def delete_secret(self, secret_name: str, version_ref: str | None = None) -> bool:
@@ -177,7 +189,10 @@ class AzureKeyVaultAdapter(BaseSecretProviderAdapter):
             vault_name = getattr(self.config, "vault_identifier", None) or "kv-enterprise-prod"
             return ConnectionTestResult(
                 success=True,
-                message=f"Azure Key Vault connection verified for '{vault_name}.vault.azure.net' via Managed Identity.",
+                message=(
+                    f"Azure Key Vault connection verified for "
+                    f"'{vault_name}.vault.azure.net' via Managed Identity."
+                ),
                 capabilities=self.get_capabilities(),
                 last_validated_at=datetime.now(UTC).isoformat(),
             )
@@ -191,7 +206,10 @@ class AzureKeyVaultAdapter(BaseSecretProviderAdapter):
     def create_secret(
         self, secret_name: str, value: str, metadata: dict[str, Any] | None = None
     ) -> tuple[str | None, str | None, dict[str, Any]]:
-        ref = f"https://{getattr(self.config, 'vault_identifier', 'kv-enterprise-prod')}.vault.azure.net/secrets/{secret_name}/{secrets.token_hex(8)}"
+        ref = (
+            f"https://{getattr(self.config, 'vault_identifier', 'kv-enterprise-prod')}"
+            f".vault.azure.net/secrets/{secret_name}/{secrets.token_hex(8)}"
+        )
         return (ref, None, {"provider": "azure_key_vault", "url": ref})
 
     def read_secret_value(
@@ -208,13 +226,19 @@ class AzureKeyVaultAdapter(BaseSecretProviderAdapter):
     def update_secret_value(
         self, secret_name: str, value: str, version_ref: str | None = None
     ) -> tuple[str | None, str | None, dict[str, Any]]:
-        ref = f"https://{getattr(self.config, 'vault_identifier', 'kv-enterprise-prod')}.vault.azure.net/secrets/{secret_name}/{secrets.token_hex(8)}"
+        ref = (
+            f"https://{getattr(self.config, 'vault_identifier', 'kv-enterprise-prod')}"
+            f".vault.azure.net/secrets/{secret_name}/{secrets.token_hex(8)}"
+        )
         return (ref, None, {"provider": "azure_key_vault", "url": ref})
 
     def rotate_secret(
         self, secret_name: str, current_version_ref: str | None = None
     ) -> tuple[str | None, str | None, dict[str, Any]]:
-        ref = f"https://{getattr(self.config, 'vault_identifier', 'kv-enterprise-prod')}.vault.azure.net/secrets/{secret_name}/{secrets.token_hex(8)}"
+        ref = (
+            f"https://{getattr(self.config, 'vault_identifier', 'kv-enterprise-prod')}"
+            f".vault.azure.net/secrets/{secret_name}/{secrets.token_hex(8)}"
+        )
         return (ref, None, {"provider": "azure_key_vault", "url": ref})
 
     def delete_secret(self, secret_name: str, version_ref: str | None = None) -> bool:
@@ -243,7 +267,10 @@ class GCPSecretManagerAdapter(BaseSecretProviderAdapter):
             project_id = getattr(self.config, "vault_identifier", None) or "gcp-enterprise-project"
             return ConnectionTestResult(
                 success=True,
-                message=f"Google Cloud Secret Manager connection verified for project '{project_id}' via Workload Identity.",
+                message=(
+                    f"Google Cloud Secret Manager connection verified for "
+                    f"project '{project_id}' via Workload Identity."
+                ),
                 capabilities=self.get_capabilities(),
                 last_validated_at=datetime.now(UTC).isoformat(),
             )
@@ -257,7 +284,10 @@ class GCPSecretManagerAdapter(BaseSecretProviderAdapter):
     def create_secret(
         self, secret_name: str, value: str, metadata: dict[str, Any] | None = None
     ) -> tuple[str | None, str | None, dict[str, Any]]:
-        ref = f"projects/{getattr(self.config, 'vault_identifier', 'gcp-project')}/secrets/{secret_name}/versions/1"
+        ref = (
+            f"projects/{getattr(self.config, 'vault_identifier', 'gcp-project')}"
+            f"/secrets/{secret_name}/versions/1"
+        )
         return (ref, None, {"provider": "gcp_secret_manager", "resource": ref})
 
     def read_secret_value(
@@ -275,14 +305,20 @@ class GCPSecretManagerAdapter(BaseSecretProviderAdapter):
         self, secret_name: str, value: str, version_ref: str | None = None
     ) -> tuple[str | None, str | None, dict[str, Any]]:
         ver = secrets.randbelow(100) + 2
-        ref = f"projects/{getattr(self.config, 'vault_identifier', 'gcp-project')}/secrets/{secret_name}/versions/{ver}"
+        ref = (
+            f"projects/{getattr(self.config, 'vault_identifier', 'gcp-project')}"
+            f"/secrets/{secret_name}/versions/{ver}"
+        )
         return (ref, None, {"provider": "gcp_secret_manager", "resource": ref})
 
     def rotate_secret(
         self, secret_name: str, current_version_ref: str | None = None
     ) -> tuple[str | None, str | None, dict[str, Any]]:
         ver = secrets.randbelow(100) + 10
-        ref = f"projects/{getattr(self.config, 'vault_identifier', 'gcp-project')}/secrets/{secret_name}/versions/{ver}"
+        ref = (
+            f"projects/{getattr(self.config, 'vault_identifier', 'gcp-project')}"
+            f"/secrets/{secret_name}/versions/{ver}"
+        )
         return (ref, None, {"provider": "gcp_secret_manager", "resource": ref})
 
     def delete_secret(self, secret_name: str, version_ref: str | None = None) -> bool:
@@ -313,7 +349,10 @@ class HashiCorpVaultAdapter(BaseSecretProviderAdapter):
             validate_provider_endpoint_ssrf(url)
             return ConnectionTestResult(
                 success=True,
-                message=f"HashiCorp Vault connection verified for cluster '{url}' (KV v2 engine) via AppRole/Kubernetes Auth.",
+                message=(
+                    f"HashiCorp Vault connection verified for cluster '{url}' "
+                    "(KV v2 engine) via AppRole/Kubernetes Auth."
+                ),
                 capabilities=self.get_capabilities(),
                 last_validated_at=datetime.now(UTC).isoformat(),
             )

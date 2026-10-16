@@ -3,11 +3,14 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from platform_api.database import get_db
+from platform_api.identity_models import Tenant
 from platform_api.identity_repository import (
     AuditLogRepository,
+    EnvironmentRepository,
     MembershipRepository,
     ProjectRepository,
     TenantRepository,
@@ -135,7 +138,7 @@ async def create_organization(
     )
 
     # Creator becomes ADMIN and is_owner = True
-    mem = MembershipRepository().add_organization_member(
+    MembershipRepository().add_organization_member(
         db,
         tenant_id=tenant.id,
         user_id=user.id,
@@ -425,7 +428,7 @@ async def update_member_role(
             detail="Cannot downgrade organization owner role",
         )
 
-    mem = MembershipRepository().add_organization_member(
+    MembershipRepository().add_organization_member(
         db,
         tenant_id=tenant.id,
         user_id=user_id,

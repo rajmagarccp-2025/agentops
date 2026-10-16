@@ -427,11 +427,15 @@ def test_10_secret_revocation_blocks_resolution_and_reactivation():
 
 
 def test_8_ssrf_endpoint_protection():
-    with pytest.raises(ValueError, match="restricted"):
-        validate_provider_endpoint_ssrf("http://127.0.0.1:8080/internal-vault")
-
-    with pytest.raises(ValueError, match="restricted"):
-        validate_provider_endpoint_ssrf("http://metadata.google.internal/computeMetadata/v1")
+    restricted_endpoints = (
+        "http://127.0.0.1:8080/internal-vault",
+        "http://10.0.0.1/internal-vault",
+        "http://[fd00::1]/internal-vault",
+        "http://metadata.google.internal/computeMetadata/v1",
+    )
+    for endpoint in restricted_endpoints:
+        with pytest.raises(ValueError, match="restricted"):
+            validate_provider_endpoint_ssrf(endpoint)
 
 
 def test_9_internal_crypto_aes256gcm():

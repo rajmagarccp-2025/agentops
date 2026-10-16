@@ -41,7 +41,7 @@ class LLMGateway:
         errors: list[str] = []
         total_retries = 0
 
-        # Resolve routes based on logical model_alias if mapped and routes not explicitly passed, else default fallback routes
+        # Use alias routes when configured; otherwise fall back to the default routes.
         alias_key = (
             request.model_alias.value
             if hasattr(request.model_alias, "value")
@@ -77,7 +77,8 @@ class LLMGateway:
                     # Timeout check against time_budget_ms
                     if latency_ms > request.time_budget_ms:
                         raise ProviderError(
-                            f"LLM request timed out after {latency_ms}ms (budget: {request.time_budget_ms}ms)"
+                            f"LLM request timed out after {latency_ms}ms "
+                            f"(budget: {request.time_budget_ms}ms)"
                         )
 
                     cost = round(

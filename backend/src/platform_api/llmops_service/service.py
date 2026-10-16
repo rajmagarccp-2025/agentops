@@ -564,7 +564,10 @@ def remove_model_administrator(
     if len(admins) <= 1 and any(a.user_id == target_user_id for a in admins):
         raise HTTPException(
             status_code=400,
-            detail="Cannot remove the last Model Administrator. Transfer ownership or assign another administrator first.",
+            detail=(
+                "Cannot remove the last Model Administrator. Transfer ownership "
+                "or assign another administrator first."
+            ),
         )
 
     db.execute(
@@ -617,7 +620,10 @@ def create_model_access_policy(
     if not _is_model_admin(db, principal, model):
         raise HTTPException(
             status_code=403,
-            detail="Permission denied: Requires Model Administrator status to grant or revoke model access.",
+            detail=(
+                "Permission denied: Requires Model Administrator status to grant "
+                "or revoke model access."
+            ),
         )
 
     policy = ModelAccessPolicy(
@@ -763,7 +769,10 @@ def invoke_chat_completion(
     if bound_projects and request.project_id and request.project_id not in bound_projects:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Model '{model.display_name}' is not enabled for requested project '{request.project_id}'.",
+            detail=(
+                f"Model '{model.display_name}' is not enabled for requested "
+                f"project '{request.project_id}'."
+            ),
         )
 
     bound_envs = [
@@ -774,7 +783,10 @@ def invoke_chat_completion(
     if bound_envs and request.environment_id and request.environment_id not in bound_envs:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Model '{model.display_name}' is not enabled for requested environment '{request.environment_id}'.",
+            detail=(
+                f"Model '{model.display_name}' is not enabled for requested "
+                f"environment '{request.environment_id}'."
+            ),
         )
 
     # 4. Mandatory Permission & Explicit Deny Check
@@ -782,7 +794,10 @@ def invoke_chat_completion(
     if "use" not in effective_perms:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access Denied: Caller does not have 'use' permission for model '{model.display_name}'.",
+            detail=(
+                f"Access Denied: Caller does not have 'use' permission "
+                f"for model '{model.display_name}'."
+            ),
         )
 
     # 5. Secure Credential Retrieval
@@ -794,7 +809,8 @@ def invoke_chat_completion(
             api_key = secret_val_resp.value
         except Exception as exc:
             logger.warning(
-                f"Could not resolve secret value for model {model.id}, falling back to adapter default: {exc}"
+                f"Could not resolve secret value for model {model.id}, "
+                f"falling back to adapter default: {exc}"
             )
 
     # 6. Select Provider Adapter & Execute

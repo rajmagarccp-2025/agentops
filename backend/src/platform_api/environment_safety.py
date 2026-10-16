@@ -27,6 +27,9 @@ def require_active_environment(
     if destructive and environment.type == "Production" and confirmation != environment.slug:
         raise HTTPException(
             status_code=status.HTTP_428_PRECONDITION_REQUIRED,
-            detail="Production changes require the X-Confirm-Production-Environment header to match the environment slug.",
+            detail=(
+                "Production changes require the X-Confirm-Production-Environment "
+                "header to match the environment slug."
+            ),
         )
     return environment

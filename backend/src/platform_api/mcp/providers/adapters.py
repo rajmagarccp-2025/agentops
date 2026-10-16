@@ -70,7 +70,8 @@ class AWSProviderAdapter(BaseProviderAdapter):
             and action not in allowlisted_actions
         ):
             raise PermissionError(
-                f"AWS action '{action}' on '{resource_type}' is NOT in the allowlisted mutation profile"
+                f"AWS action '{action}' on '{resource_type}' is NOT in the "
+                "allowlisted mutation profile"
             )
         return {
             "provider": "aws",
@@ -147,7 +148,10 @@ class AzureProviderAdapter(BaseProviderAdapter):
         self, principal: Principal, account_id: str | None = None
     ) -> ProviderCredentialContext:
         sub_id = account_id or "sub-azure-sre-001"
-        msi_identity = f"/subscriptions/{sub_id}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/AgenticSRE-{self.permission_profile}"
+        msi_identity = (
+            f"/subscriptions/{sub_id}/providers/Microsoft.ManagedIdentity/"
+            f"userAssignedIdentities/AgenticSRE-{self.permission_profile}"
+        )
         return ProviderCredentialContext(
             provider=self.provider,
             tenant_id=principal.tenant_id,

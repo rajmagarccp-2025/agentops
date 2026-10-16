@@ -62,5 +62,8 @@ async def submit_contact(
     return ContactResponse(
         success=True,
         ticket_id=ticket_id,
-        message="Thank you! Your message has been received and our engineering support team will respond shortly.",
+        message=(
+            "Thank you! Your message has been received and our engineering "
+            "support team will respond shortly."
+        ),
     )

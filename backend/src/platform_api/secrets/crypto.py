@@ -32,7 +32,7 @@ class InternalCryptoService:
 
     @staticmethod
     def encrypt(plaintext: str) -> tuple[str, dict[str, Any]]:
-        """Encrypts plaintext using AES-256-GCM. Returns (base64_ciphertext, encryption_metadata)."""
+        """Encrypt plaintext with AES-256-GCM and return ciphertext and metadata."""
         key = _derive_master_key()
         aesgcm = AESGCM(key)
         nonce = os.urandom(12)  # 96-bit nonce for GCM

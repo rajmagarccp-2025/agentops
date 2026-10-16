@@ -47,14 +47,18 @@ def build_recommendations(tenant_id: str) -> list[FinOpsRecommendation]:
                     current_capacity="8 vCPU, 32GB RAM (e2-standard-8)",
                     proposed_capacity="4 vCPU, 16GB RAM (e2-standard-4)",
                     estimated_monthly_savings_usd=savings,
-                    savings_formula=f"Current Monthly Spend (${utilization_record.monthly_cost_usd:.2f}) * 35% Rightsizing Factor = ${savings:.2f}/mo",
+                    savings_formula=(
+                        f"Current Monthly Spend (${utilization_record.monthly_cost_usd:.2f}) "
+                        f"* 35% Rightsizing Factor = ${savings:.2f}/mo"
+                    ),
                     assumptions=[
                         "P99 CPU utilization remains under 45% over 30 days.",
                         "Workload is non-bursty during peak business hours.",
                     ],
                     confidence=0.86,
                     risks=[
-                        "Potential CPU throttling during unexpected traffic spikes if autoscaling is disabled."
+                        "Potential CPU throttling during unexpected traffic spikes "
+                        "if autoscaling is disabled."
                     ],
                     dependencies=[
                         "Kubernetes Deployment resource limit approval",
@@ -75,11 +79,17 @@ def build_recommendations(tenant_id: str) -> list[FinOpsRecommendation]:
                     resource_id=utilization_record.resource_id,
                     service=utilization_record.service,
                     title=f"Decommission idle resource {utilization_record.resource_id}",
-                    rationale="CPU and memory utilization are both below 5% for over 14 consecutive days.",
+                    rationale=(
+                        "CPU and memory utilization are both below 5% for over "
+                        "14 consecutive days."
+                    ),
                     current_capacity="1 Active Compute Instance (n2-standard-4)",
                     proposed_capacity="0 Instance (Terminated / Decommissioned)",
                     estimated_monthly_savings_usd=savings,
-                    savings_formula=f"Current Monthly Cost (${utilization_record.monthly_cost_usd:.2f}) - Decommissioned Cost ($0.00) = ${savings:.2f}/mo",
+                    savings_formula=(
+                        f"Current Monthly Cost (${utilization_record.monthly_cost_usd:.2f}) "
+                        f"- Decommissioned Cost ($0.00) = ${savings:.2f}/mo"
+                    ),
                     assumptions=[
                         "Resource has zero inbound network requests in 14 days.",
                         "No active persistent storage attachments holding unbacked data.",
@@ -105,7 +115,10 @@ def build_recommendations(tenant_id: str) -> list[FinOpsRecommendation]:
             resource_id="k8s-node-pool-dev-nonprod",
             service="k8s-cluster-dev",
             title="Schedule Non-Production Node Pool Shutdown Outside Business Hours",
-            rationale="Dev and staging node pools run 24/7 despite zero deployment activity between 8 PM and 7 AM weekdays and weekends.",
+            rationale=(
+                "Dev and staging node pools run 24/7 despite zero deployment activity "
+                "between 8 PM and 7 AM weekdays and weekends."
+            ),
             current_capacity="24/7 Continuous Execution (168 hrs/week)",
             proposed_capacity="Scheduled Execution: Mon-Fri 7 AM - 8 PM (65 hrs/week)",
             estimated_monthly_savings_usd=1450.00,
@@ -132,7 +145,10 @@ def build_recommendations(tenant_id: str) -> list[FinOpsRecommendation]:
             resource_id="gcp-compute-engine-us-central1",
             service="compute-engine",
             title="Purchase 1-Year Committed Use Discount (CUD) for Baseline Workloads",
-            rationale="Consistent baseline compute usage of 48 vCPUs across production accounts has 99.8% steady-state uptime.",
+            rationale=(
+                "Consistent baseline compute usage of 48 vCPUs across production "
+                "accounts has 99.8% steady-state uptime."
+            ),
             current_capacity="On-Demand Pricing ($0.0475 / vCPU-hr)",
             proposed_capacity="1-Year CUD Pricing ($0.0298 / vCPU-hr)",
             estimated_monthly_savings_usd=2820.00,
@@ -160,11 +176,17 @@ def build_recommendations(tenant_id: str) -> list[FinOpsRecommendation]:
                     resource_id=None,
                     service=service,
                     title=f"Investigate {service} cost anomaly",
-                    rationale="The latest cost is more than 30% above the prior historical average.",
+                    rationale=(
+                        "The latest cost is more than 30% above the prior "
+                        "historical average."
+                    ),
                     current_capacity="Baseline spend average ($4,200/mo)",
                     proposed_capacity="Investigated & Remedied baseline spend ($4,200/mo)",
                     estimated_monthly_savings_usd=1200.00,
-                    savings_formula=f"Current Spike Spend (${amounts[-1]:.2f}) - Baseline Average Spend = $1,200.00/mo",
+                    savings_formula=(
+                        f"Current Spike Spend (${amounts[-1]:.2f}) "
+                        "- Baseline Average Spend = $1,200.00/mo"
+                    ),
                     assumptions=[
                         "Cost anomaly is caused by runaway logging or unindexed database queries."
                     ],

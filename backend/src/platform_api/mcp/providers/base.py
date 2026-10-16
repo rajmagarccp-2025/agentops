@@ -1,9 +1,11 @@
 """Production Provider Adapter Foundation & Registry.
 
 Architectural Guarantees:
-1. Agents NEVER import provider SDKs. All infrastructure interactions route through Provider Adapters via MCP.
+1. Agents NEVER import provider SDKs. Infrastructure interactions route through provider
+   adapters via MCP.
 2. Only Provider Adapters communicate with provider APIs.
-3. Credential resolution happens outside agents (Workload Identity / Managed Identity / STS / ServiceAccount).
+3. Credentials are resolved outside agents (Workload Identity / Managed Identity / STS /
+   ServiceAccount).
 4. Strict capability-specific permission profiles. No AdministratorAccess universal credentials.
 5. Extensible architecture allowing easy addition of custom cloud/platform providers.
 """
@@ -71,7 +73,7 @@ class BaseProviderAdapter(ABC):
 
 
 class ProviderAdapterRegistry:
-    """Registry managing provider adapters for AWS, GCP, Azure, Kubernetes, OpenShift, GitHub, and custom providers."""
+    """Registry managing cloud, Kubernetes, OpenShift, GitHub, and custom provider adapters."""
 
     def __init__(self) -> None:
         self._adapters: dict[CloudProvider, BaseProviderAdapter] = {}

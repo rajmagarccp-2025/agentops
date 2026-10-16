@@ -40,7 +40,7 @@ def supervisor_node(state: AgentState) -> AgentState:
     request_text = state.get("request", "").lower()
 
     # 1. Classification & minimal workflow plan building
-    # Conditional integration: Dispatch Security, FinOps, or LLMOps Agent based on explicit request_type or query keywords
+    # Dispatch Security, FinOps, or LLMOps based on request_type or query keywords.
     security_terms = {"security", "iam", "policy", "vulnerability", "auth", "credential", "threat"}
     llmops_terms = {
         "llmops",
@@ -95,7 +95,8 @@ def supervisor_node(state: AgentState) -> AgentState:
     existing_findings = state.get("findings", [])
     if len(existing_findings) > 1 and existing_findings[0] != existing_findings[1]:
         disagreements.append(
-            f"Disagreement detected between telemetry findings and model reasoning: '{existing_findings[0]}' vs '{existing_findings[1]}'"
+            "Disagreement detected between telemetry findings and model reasoning: "
+            f"'{existing_findings[0]}' vs '{existing_findings[1]}'"
         )
 
     return _step(
@@ -230,7 +231,7 @@ def discovery_node(state: AgentState) -> AgentState:
         f"Coverage: {summary.coverage_percentage}%\n"
         "Provide evidence-backed discovery findings and recommendations."
     )
-    llm_resp = llm_gateway.complete(
+    _ = llm_gateway.complete(
         LLMRequest(
             task="discovery_topology_analysis",
             model_alias="reasoning.fast",
@@ -249,17 +250,26 @@ def discovery_node(state: AgentState) -> AgentState:
     structured_findings = [
         {
             "category": "OBSERVED",
-            "description": f"Discovered {len(resources)} deduplicated resources across {len(summary.kinds_count)} infrastructure categories.",
+            "description": (
+                f"Discovered {len(resources)} deduplicated resources across "
+                f"{len(summary.kinds_count)} infrastructure categories."
+            ),
             "evidence_ids": ["ev-inventory-snapshot"],
         },
         {
             "category": "INFERRED",
-            "description": f"Topological dependency mapped: {dependencies[0].source} → {dependencies[0].target} ({dependencies[0].dependency_type}).",
+            "description": (
+                f"Topological dependency mapped: {dependencies[0].source} → "
+                f"{dependencies[0].target} ({dependencies[0].dependency_type})."
+            ),
             "evidence_ids": ["ev-inventory-deps"],
         },
         {
             "category": "RECOMMENDED",
-            "description": "Maintain continuous multi-cloud discovery sync to detect unmanaged shadow cloud assets.",
+            "description": (
+                "Maintain continuous multi-cloud discovery sync to detect "
+                "unmanaged shadow cloud assets."
+            ),
             "evidence_ids": ["ev-inventory-summary"],
         },
     ]
@@ -272,7 +282,9 @@ def discovery_node(state: AgentState) -> AgentState:
             "evidence": [snapshot.model_dump()],
             "structured_findings": structured_findings,
             "findings": [f"[{sf['category']}] {sf['description']}" for sf in structured_findings],
-            "recommendation": "Topology & asset dependencies mapped successfully with 100% coverage.",
+            "recommendation": (
+                "Topology & asset dependencies mapped successfully with 100% coverage."
+            ),
             "inventory_count": len(resources),
         },
     )
@@ -425,9 +437,10 @@ def sre_node(state: AgentState) -> AgentState:
     prompt = (
         f"User Request: {state['request']}\n"
         f"GKE Telemetry Evidence: {evidence}\n"
-        "Provide evidence-backed investigation findings, hypothesis confidence, and recommendations."
+        "Provide evidence-backed investigation findings, hypothesis confidence, "
+        "and recommendations."
     )
-    llm_resp = llm_gateway.complete(
+    _ = llm_gateway.complete(
         LLMRequest(
             task="sre_gke_investigation",
             model_alias="reasoning.primary",
@@ -446,29 +459,44 @@ def sre_node(state: AgentState) -> AgentState:
     structured_findings = [
         {
             "category": "OBSERVED",
-            "description": f"Pod {pod_name} in namespace {namespace} status is Running with 0 restarts across 2 containers.",
+            "description": (
+                f"Pod {pod_name} in namespace {namespace} status is Running "
+                "with 0 restarts across 2 containers."
+            ),
             "evidence_ids": ["ev-pod-get", "ev-pod-describe"],
         },
         {
             "category": "OBSERVED",
-            "description": f"Deployment {deployment_name} has 3 available out of 3 desired replicas on node {node_name}.",
+            "description": (
+                f"Deployment {deployment_name} has 3 available out of 3 desired "
+                f"replicas on node {node_name}."
+            ),
             "evidence_ids": ["ev-deployment-get", "ev-node-get"],
         },
         {
             "category": "INFERRED",
-            "description": "Pod readiness probe experienced transient latency spike correlated with commit a1b2c3d.",
+            "description": (
+                "Pod readiness probe experienced transient latency spike "
+                "correlated with commit a1b2c3d."
+            ),
             "evidence_ids": ["ev-pod-logs", "ev-change-01", "ev-metrics-get"],
         },
         {
             "category": "RECOMMENDED",
-            "description": "Monitor container CPU throttling and verify HPA memory scaling limits in runbook.",
+            "description": (
+                "Monitor container CPU throttling and verify HPA memory scaling "
+                "limits in runbook."
+            ),
             "evidence_ids": ["ev-metrics-get", "ev-rag-context"],
         },
     ]
 
     hypotheses = [
         {
-            "hypothesis": "Transient connection pool saturation following recent deployment commit a1b2c3d.",
+            "hypothesis": (
+                "Transient connection pool saturation following recent deployment "
+                "commit a1b2c3d."
+            ),
             "confidence": 0.85,
             "evidence_ids": ["ev-change-01", "ev-pod-logs"],
         }
@@ -608,13 +636,18 @@ def change_node(state: AgentState) -> AgentState:
     # Temporal Proximity Rule: Temporal proximity indicates correlation, NOT definitive causality.
     supporting_evidence = [
         "Deployment v2.18.4 (commit a1b2c3d) occurred 12 minutes prior to P95 latency spike.",
-        "ConfigMap DB_POOL_SIZE reduction to 20 aligns temporally with 96% connection pool saturation logs.",
+        "ConfigMap DB_POOL_SIZE reduction to 20 aligns temporally with 96% "
+        "connection pool saturation logs.",
     ]
     contradicting_evidence = [
-        "GKE cluster control plane auto-upgrade completed successfully 2 hours prior with 0 reported node drops.",
+        "GKE cluster control plane auto-upgrade completed successfully 2 hours "
+        "prior with 0 reported node drops.",
         "HPA memory threshold Terraform update has not triggered pod eviction events.",
     ]
-    uncertainty = "Temporal correlation detected between DB_POOL_SIZE configuration change and connection pool exhaustion; causality requires load test verification."
+    uncertainty = (
+        "Temporal correlation detected between DB_POOL_SIZE configuration change "
+        "and connection pool exhaustion; causality requires load test verification."
+    )
 
     # 4. LLM Gateway Change Intelligence Reasoning via reasoning.fast
     prompt = (
@@ -625,7 +658,7 @@ def change_node(state: AgentState) -> AgentState:
         f"Contradicting Evidence: {contradicting_evidence}\n"
         "Analyze change risk without assuming temporal proximity equals causality."
     )
-    llm_resp = llm_gateway.complete(
+    _ = llm_gateway.complete(
         LLMRequest(
             task="change_intelligence_correlation",
             model_alias="reasoning.fast",
@@ -643,17 +676,26 @@ def change_node(state: AgentState) -> AgentState:
     structured_findings = [
         {
             "category": "OBSERVED",
-            "description": f"Correlated {len(raw_changes)} change events across deployment, configuration, IaC, and platform upgrade streams.",
+            "description": (
+                f"Correlated {len(raw_changes)} change events across deployment, "
+                "configuration, IaC, and platform upgrade streams."
+            ),
             "evidence_ids": ["ev-change-events"],
         },
         {
             "category": "INFERRED",
-            "description": "ConfigMap DB_POOL_SIZE reduction is the probable driver for DB connection pool saturation (correlation score: 0.82).",
+            "description": (
+                "ConfigMap DB_POOL_SIZE reduction is the probable driver for DB "
+                "connection pool saturation (correlation score: 0.82)."
+            ),
             "evidence_ids": ["ev-change-config", "ev-supporting-logs"],
         },
         {
             "category": "RECOMMENDED",
-            "description": "Revert ConfigMap DB_POOL_SIZE to 50 or prepare canary rollback if latency P95 exceeds 1000ms.",
+            "description": (
+                "Revert ConfigMap DB_POOL_SIZE to 50 or prepare canary rollback "
+                "if latency P95 exceeds 1000ms."
+            ),
             "evidence_ids": ["ev-change-deploy"],
         },
     ]
@@ -681,7 +723,10 @@ def change_node(state: AgentState) -> AgentState:
             "findings": [f"[{sf['category']}] {sf['description']}" for sf in structured_findings],
             "hypotheses": [
                 {
-                    "hypothesis": "ConfigMap DB_POOL_SIZE reduction triggered downstream database connection pool exhaustion.",
+                    "hypothesis": (
+                        "ConfigMap DB_POOL_SIZE reduction triggered downstream "
+                        "database connection pool exhaustion."
+                    ),
                     "confidence": 0.82,
                     "evidence_ids": ["chg-config-002"],
                 }
@@ -699,8 +744,6 @@ def change_node(state: AgentState) -> AgentState:
 
 def finops_node(state: AgentState) -> AgentState:
     principal = _principal(state, "tools:read")
-    target_resource = state.get("target_resource", "checkout-api")
-
     # 1. Gather FinOps Financial & Telemetry Summary
     finops_summary = build_finops_summary(principal.tenant_id)
     recommendations_list = finops_summary.recommendations
@@ -721,7 +764,8 @@ def finops_node(state: AgentState) -> AgentState:
         f"Spend Telemetry Summary: {utilization_summary}\n"
         f"Generated Savings Recommendations Count: {len(recommendations_list)}\n"
         "Evaluate rightsizing, scheduling, commitment discounts, and idle cleanup opportunities. "
-        "Strict Rule: Do NOT trigger automatic capacity changes. Recommendations require human confirmation."
+        "Strict Rule: Do NOT trigger automatic capacity changes. "
+        "Recommendations require human confirmation."
     )
     llm_resp = llm_gateway.complete(
         LLMRequest(
@@ -730,7 +774,10 @@ def finops_node(state: AgentState) -> AgentState:
             messages=[
                 ChatMessage(
                     role=MessageRole.SYSTEM,
-                    content="You are an expert Cloud FinOps Agent specializing in cost allocation, anomaly detection, and capacity rightsizing.",
+                    content=(
+                        "You are an expert Cloud FinOps Agent specializing in cost "
+                        "allocation, anomaly detection, and capacity rightsizing."
+                    ),
                 ),
                 ChatMessage(role=MessageRole.USER, content=prompt),
             ],
@@ -745,29 +792,46 @@ def finops_node(state: AgentState) -> AgentState:
     structured_findings = [
         {
             "category": "OBSERVED",
-            "description": f"Analyzed monthly spend of ${finops_summary.total_cost_usd:,.2f} across {len(cost_allocation)} service domains.",
+            "description": (
+                f"Analyzed monthly spend of ${finops_summary.total_cost_usd:,.2f} "
+                f"across {len(cost_allocation)} service domains."
+            ),
             "evidence_ids": ["finops-cost-allocation"],
         },
         {
             "category": "INFERRED",
-            "description": f"Identified ${total_potential_savings:,.2f}/month in actionable optimization opportunities across rightsizing, scheduling, CUDs, and cleanup.",
+            "description": (
+                f"Identified ${total_potential_savings:,.2f}/month in actionable "
+                "optimization opportunities across rightsizing, scheduling, CUDs, "
+                "and cleanup."
+            ),
             "evidence_ids": ["finops-recommendations-list"],
         },
         {
             "category": "RECOMMENDED",
-            "description": f"Review top recommendation: '{recommendations_list[0].title}' for estimated ${recommendations_list[0].estimated_monthly_savings_usd:,.2f}/mo savings (requires human approval).",
+            "description": (
+                f"Review top recommendation: '{recommendations_list[0].title}' for "
+                f"estimated ${recommendations_list[0].estimated_monthly_savings_usd:,.2f}/mo "
+                "savings (requires human approval)."
+            ),
             "evidence_ids": [recommendations_list[0].id],
         },
     ]
 
     hypotheses = [
         {
-            "hypothesis": "Non-production node pools running off-hours contribute to 17% of excess compute spend.",
+            "hypothesis": (
+                "Non-production node pools running off-hours contribute to 17% "
+                "of excess compute spend."
+            ),
             "confidence": 0.90,
             "evidence_ids": ["k8s-node-pool-dev-nonprod"],
         },
         {
-            "hypothesis": "Overprovisioned e2-standard-8 instances in checkout-api service can be safely rightsized to e2-standard-4.",
+            "hypothesis": (
+                "Overprovisioned e2-standard-8 instances in checkout-api service "
+                "can be safely rightsized to e2-standard-4."
+            ),
             "confidence": 0.86,
             "evidence_ids": ["utilization-checkout-api"],
         },
@@ -785,7 +849,10 @@ def finops_node(state: AgentState) -> AgentState:
             "hypotheses": hypotheses,
             "confidence": 0.91,
             "total_potential_savings_usd": total_potential_savings,
-            "recommendation": f"Review {len(recommendations_list)} savings proposals yielding potential ${total_potential_savings:,.2f}/month savings.",
+            "recommendation": (
+                f"Review {len(recommendations_list)} savings proposals yielding "
+                f"potential ${total_potential_savings:,.2f}/month savings."
+            ),
             "recommendations": [r.title for r in recommendations_list],
         },
     )
@@ -906,7 +973,10 @@ def security_node(state: AgentState) -> AgentState:
                 "resource_id": evt.resource_id,
                 "details": evt.details,
             },
-            recommended_action=f"Audit access logs for {evt.actor} and request explicit human security approval before credential rotation.",
+            recommended_action=(
+                f"Audit access logs for {evt.actor} and request explicit human "
+                "security approval before credential rotation."
+            ),
             requires_approval=True,
         )
         for evt in raw_events
@@ -919,7 +989,8 @@ def security_node(state: AgentState) -> AgentState:
         f"IAM Activities: {iam_activities}\n"
         f"Affected Resources: {affected_resources}\n"
         f"Timeline Summary: {[t['title'] for t in timeline]}\n"
-        "Provide evidence-backed hypotheses and risk assessment. Do NOT mutate permissions, IAM, firewalls, or credentials."
+        "Provide evidence-backed hypotheses and risk assessment. Do NOT mutate "
+        "permissions, IAM, firewalls, or credentials."
     )
     llm_resp = llm_gateway.complete(
         LLMRequest(
@@ -939,12 +1010,18 @@ def security_node(state: AgentState) -> AgentState:
     # 7. Evidence-backed Structured Findings & Hypotheses
     hypotheses = [
         {
-            "hypothesis": f"Suspicious API token generation for service account {target_resource}-sa from non-corporate IP CIDR.",
+            "hypothesis": (
+                f"Suspicious API token generation for service account "
+                f"{target_resource}-sa from non-corporate IP CIDR."
+            ),
             "confidence": 0.89,
             "evidence_ids": ["sec-evt-002"],
         },
         {
-            "hypothesis": "Cross-account AssumeRole request originated from external unverified account identity.",
+            "hypothesis": (
+                "Cross-account AssumeRole request originated from external "
+                "unverified account identity."
+            ),
             "confidence": 0.82,
             "evidence_ids": ["sec-evt-001"],
         },
@@ -953,17 +1030,26 @@ def security_node(state: AgentState) -> AgentState:
     structured_findings = [
         {
             "category": "OBSERVED",
-            "description": f"Identified {len(raw_events)} security events across CloudTrail, K8s audit, and SCC streams.",
+            "description": (
+                f"Identified {len(raw_events)} security events across CloudTrail, "
+                "K8s audit, and SCC streams."
+            ),
             "evidence_ids": ["sec-events-log"],
         },
         {
             "category": "INFERRED",
-            "description": f"Potential credential leakage or unauthorized access attempt on {target_resource}-sa service account (confidence: 0.89).",
+            "description": (
+                f"Potential credential leakage or unauthorized access attempt on "
+                f"{target_resource}-sa service account (confidence: 0.89)."
+            ),
             "evidence_ids": ["sec-evt-002", "iam-activities"],
         },
         {
             "category": "RECOMMENDED",
-            "description": "Submit a governed security remediation request for human approval (no automated mutation permitted).",
+            "description": (
+                "Submit a governed security remediation request for human approval "
+                "(no automated mutation permitted)."
+            ),
             "evidence_ids": ["sec-findings"],
         },
     ]
@@ -992,7 +1078,10 @@ def security_node(state: AgentState) -> AgentState:
             + [llm_resp.content],
             "hypotheses": hypotheses,
             "confidence": 0.87,
-            "recommendation": "Submit governed security approval for key rotation and IP CIDR restriction.",
+            "recommendation": (
+                "Submit governed security approval for key rotation and IP CIDR "
+                "restriction."
+            ),
             "recommendations": [
                 "Submit governed security approval for key rotation and IP CIDR restriction.",
                 "Review CloudTrail assume-role events for external account 999999999999.",
@@ -1017,7 +1106,10 @@ def mlops_node(state: AgentState) -> AgentState:
             messages=[
                 ChatMessage(
                     role=MessageRole.SYSTEM,
-                    content="You are an MLOps agent monitoring ML pipelines, training runs, and model feature drift.",
+                    content=(
+                        "You are an MLOps agent monitoring ML pipelines, training "
+                        "runs, and model feature drift."
+                    ),
                 ),
                 ChatMessage(
                     role=MessageRole.USER,
@@ -1037,7 +1129,9 @@ def mlops_node(state: AgentState) -> AgentState:
                 llm_resp.content,
                 "Model feature drift within acceptable threshold (0.18 < 0.25 limit).",
             ],
-            "recommendation": "Schedule weekly retraining pipeline on updated feature store dataset.",
+            "recommendation": (
+                "Schedule weekly retraining pipeline on updated feature store dataset."
+            ),
         },
     )
 
@@ -1101,7 +1195,10 @@ def llmops_node(state: AgentState) -> AgentState:
             tool_call_accuracy=0.89,
             error_rate=0.022,
             regression_detected=True,
-            regression_details="Tool call JSON schema parse failure rate increased by +1.8% following prompt template update v3.1.0.",
+            regression_details=(
+                "Tool call JSON schema parse failure rate increased by +1.8% "
+                "following prompt template update v3.1.0."
+            ),
         ),
     ]
 
@@ -1110,28 +1207,42 @@ def llmops_node(state: AgentState) -> AgentState:
         LLMOpsFinding(
             category="OBSERVED",
             metric="latency",
-            description="P99 latency across primary reasoning models remains well within 1,500ms SLA (P99: 1,320ms for gemini-1.5-pro, 420ms for gemini-1.5-flash).",
+            description=(
+                "P99 latency across primary reasoning models remains well within "
+                "1,500ms SLA (P99: 1,320ms for gemini-1.5-pro, 420ms for gemini-1.5-flash)."
+            ),
             impact="LOW",
             evidence_ids=["telemetry-reasoning-primary", "telemetry-reasoning-fast"],
         ),
         LLMOpsFinding(
             category="OBSERVED",
             metric="tokens_and_cost",
-            description="Total 24h token consumption across all provider aliases reached 16.45M tokens ($172.00 USD total daily spend).",
+            description=(
+                "Total 24h token consumption across all provider aliases reached "
+                "16.45M tokens ($172.00 USD total daily spend)."
+            ),
             impact="LOW",
             evidence_ids=["telemetry-summary-24h"],
         ),
         LLMOpsFinding(
             category="INFERRED",
             metric="regression",
-            description="Regression detected in model alias 'structured.output' (gpt-4o-mini, prompt v3.1.0): Tool call accuracy degraded from 94% to 89% with 2.2% error rate.",
+            description=(
+                "Regression detected in model alias 'structured.output' "
+                "(gpt-4o-mini, prompt v3.1.0): Tool call accuracy degraded from "
+                "94% to 89% with 2.2% error rate."
+            ),
             impact="MEDIUM",
             evidence_ids=["telemetry-structured-output", "prompt-v3.1.0"],
         ),
         LLMOpsFinding(
             category="RECOMMENDED",
             metric="prompt_versions",
-            description="Recommend staging rollback of 'structured.output' prompt template from v3.1.0 to v3.0.4 after human review. (Read-only monitoring agent will not automatically modify production prompts).",
+            description=(
+                "Recommend staging rollback of 'structured.output' prompt template "
+                "from v3.1.0 to v3.0.4 after human review. (Read-only monitoring "
+                "agent will not automatically modify production prompts)."
+            ),
             impact="MEDIUM",
             evidence_ids=["prompt-v3.0.4-baseline"],
         ),
@@ -1142,8 +1253,10 @@ def llmops_node(state: AgentState) -> AgentState:
         f"Perform LLMOps monitoring analysis for target service {target_resource}:\n"
         f"Telemetry Reports: {[r.model_dump() for r in telemetry_reports]}\n"
         f"Findings Summary: {[f.description for f in findings]}\n"
-        "Evaluate model latency, token budgets, prompt regressions, retrieval precision, and tool call accuracy. "
-        "Strict Rule: Do NOT modify production models, prompts, providers, policies, or evaluation thresholds."
+        "Evaluate model latency, token budgets, prompt regressions, retrieval precision, "
+        "and tool call accuracy. "
+        "Strict Rule: Do NOT modify production models, prompts, providers, policies, "
+        "or evaluation thresholds."
     )
     llm_resp = llm_gateway.complete(
         LLMRequest(
@@ -1152,7 +1265,10 @@ def llmops_node(state: AgentState) -> AgentState:
             messages=[
                 ChatMessage(
                     role=MessageRole.SYSTEM,
-                    content="You are a Read-Only LLMOps Monitoring Agent tracking prompt quality, model latency, token costs, and evaluation regressions.",
+                    content=(
+                        "You are a Read-Only LLMOps Monitoring Agent tracking prompt "
+                        "quality, model latency, token costs, and evaluation regressions."
+                    ),
                 ),
                 ChatMessage(role=MessageRole.USER, content=prompt),
             ],
@@ -1162,12 +1278,18 @@ def llmops_node(state: AgentState) -> AgentState:
 
     hypotheses = [
         {
-            "hypothesis": "Prompt version v3.1.0 introduced ambiguous nested JSON field formatting resulting in a 2.2% schema parsing error rate.",
+            "hypothesis": (
+                "Prompt version v3.1.0 introduced ambiguous nested JSON field "
+                "formatting resulting in a 2.2% schema parsing error rate."
+            ),
             "confidence": 0.91,
             "evidence_ids": ["telemetry-structured-output"],
         },
         {
-            "hypothesis": "RAG context truncation in reasoning.primary prompt v2.4.0 causes occasional recall drop below 90%.",
+            "hypothesis": (
+                "RAG context truncation in reasoning.primary prompt v2.4.0 causes "
+                "occasional recall drop below 90%."
+            ),
             "confidence": 0.82,
             "evidence_ids": ["telemetry-reasoning-primary"],
         },
@@ -1207,7 +1329,10 @@ def llmops_node(state: AgentState) -> AgentState:
             "findings": [f"[{f.category}] {f.description}" for f in findings] + [llm_resp.content],
             "hypotheses": hypotheses,
             "confidence": 0.90,
-            "recommendation": "Review prompt v3.1.0 tool call regression in staging (no automatic production mutation performed).",
+            "recommendation": (
+                "Review prompt v3.1.0 tool call regression in staging "
+                "(no automatic production mutation performed)."
+            ),
             "recommendations": monitoring_result.recommendations,
         },
     )
@@ -1236,7 +1361,9 @@ def remediation_node(state: AgentState) -> AgentState:
                 reason=state["request"],
                 risk=execution.risk,
                 affected_resources=[
-                    f"deployment/{state.get('environment', 'production')}/{state.get('target_resource', 'checkout-api')}"
+                    "deployment/"
+                    f"{state.get('environment', 'production')}/"
+                    f"{state.get('target_resource', 'checkout-api')}"
                 ],
                 parameters={
                     "namespace": state.get("environment", "production"),
@@ -1260,7 +1387,7 @@ def governance_node(state: AgentState) -> AgentState:
     project_id = state.get("project_id", "proj-sre-01")
 
     # Audit & Policy Enforcement Verification
-    policy_check = tool_registry.execute(
+    _ = tool_registry.execute(
         "policy.evaluate",
         {"environment": environment, "project_id": project_id, "policy_set": "compliance-standard"},
         principal,
@@ -1271,7 +1398,8 @@ def governance_node(state: AgentState) -> AgentState:
     findings = [
         "[OBSERVED] Governance & Compliance controls verified for SOC2, PCI-DSS, and ISO27001.",
         f"[OBSERVED] RBAC policies and audit logging active on environment: {environment}.",
-        "[RECOMMENDED] Continuous automated compliance monitoring enabled across all active projects.",
+        "[RECOMMENDED] Continuous automated compliance monitoring enabled across "
+        "all active projects.",
     ]
     return _step(
         state,
@@ -1280,7 +1408,10 @@ def governance_node(state: AgentState) -> AgentState:
             "status": "completed",
             "findings": findings,
             "confidence": 0.99,
-            "recommendation": "All compliance guardrails satisfied. Audit logs successfully immutable and signed.",
+            "recommendation": (
+                "All compliance guardrails satisfied. Audit logs successfully "
+                "immutable and signed."
+            ),
             "recommendations": [
                 "Maintain continuous policy compliance scans on production & staging environments.",
                 "Enforce multi-factor authorization for sensitive infrastructure state mutations.",

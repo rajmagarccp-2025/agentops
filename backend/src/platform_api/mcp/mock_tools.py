@@ -143,7 +143,10 @@ def gke_pod_logs(query: PodLogsQuery, tenant_id: str) -> ToolResult:
             "namespace": query.namespace,
             "pod_name": query.pod_name,
             "lines_returned": query.lines,
-            "logs": f"2026-09-29T10:00:00Z [INFO] Application started on pod {query.pod_name}\n2026-09-29T10:01:00Z [INFO] Health check passed.",
+            "logs": (
+                f"2026-09-29T10:00:00Z [INFO] Application started on pod {query.pod_name}\n"
+                "2026-09-29T10:01:00Z [INFO] Health check passed."
+            ),
         },
     )
 

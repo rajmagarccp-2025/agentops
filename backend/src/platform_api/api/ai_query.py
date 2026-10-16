@@ -33,7 +33,7 @@ async def execute_ai_query(
     principal: Annotated[Principal, Depends(get_current_principal)],
     db: Annotated[Session, Depends(get_db)],
 ) -> dict[str, Any]:
-    """Execute AI reasoning query against target project and environment. Enforces strict RBAC and tenant isolation."""
+    """Execute an AI query against a project and environment with RBAC and tenant isolation."""
     # 1. Enforce tenant scope
     verify_tenant_scope(principal, req.organization_id)
 
@@ -80,7 +80,10 @@ async def execute_ai_query(
     if em_info and em_info[1].name == "READ":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: User has READ role on this environment and cannot execute AI queries",
+            detail=(
+                "Permission denied: User has READ role on this environment "
+                "and cannot execute AI queries"
+            ),
         )
 
     has_env_access = bool(
@@ -120,7 +123,10 @@ async def execute_ai_query(
             "project_id": req.project_id,
             "environment_id": req.environment_id,
         },
-        "response": f"AI synthesis for '{req.query}' in {env.name}: All systems operational, telemetry within threshold.",
+        "response": (
+            f"AI synthesis for '{req.query}' in {env.name}: "
+            "All systems operational, telemetry within threshold."
+        ),
         "model": "platform-agent-router-v1",
         "confidence": 0.94,
     }

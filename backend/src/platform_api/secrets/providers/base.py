@@ -38,16 +38,18 @@ def validate_provider_endpoint_ssrf(endpoint_url: str | None) -> None:
     if not hostname:
         raise ValueError("Invalid endpoint URL: missing hostname.")
 
-    # Check for localhost / loopback or private ranges unless explicit dev configuration
+    # Reject localhost, loopback, and private IP addresses.
     try:
         ip = ipaddress.ip_address(hostname)
-        if ip.is_loopback or ip.is_private or ip.is_reserved or ip.is_multicast:
-            raise ValueError(f"Endpoint host '{hostname}' resolves to restricted IP range.")
     except ValueError:
-        # Hostname is a domain name (e.g. vault.azure.net, secretsmanager.us-east-1.amazonaws.com)
         restricted_names = {"localhost", "127.0.0.1", "::1", "metadata.google.internal"}
         if hostname.lower() in restricted_names:
-            raise ValueError(f"Endpoint host '{hostname}' is restricted.")
+            raise ValueError(f"Endpoint host '{hostname}' is restricted.") from None
+    else:
+        if ip.is_loopback or ip.is_private or ip.is_reserved or ip.is_multicast:
+            raise ValueError(
+                f"Endpoint host '{hostname}' resolves to restricted IP range."
+            )
 
 
 class BaseSecretProviderAdapter(ABC):

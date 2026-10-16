@@ -138,7 +138,10 @@ def _decode_token(token: str) -> dict[str, Any]:
 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid or expired OIDC access token: {last_error or 'Keycloak JWKS resolution failed'}",
+            detail=(
+                "Invalid or expired OIDC access token: "
+                f"{last_error or 'Keycloak JWKS resolution failed'}"
+            ),
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -212,7 +215,7 @@ def _build_principal_from_claims(claims: dict[str, Any], require_tenant: bool = 
         if r_upper in ROLE_PERMISSIONS_MAP:
             perms_list.extend(ROLE_PERMISSIONS_MAP[r_upper])
 
-    # Map permissions canonically between dot and colon notations (e.g. inventory.read <-> inventory:read)
+    # Map permissions between dot and colon forms (e.g. inventory.read <-> inventory:read).
     canonical_perms = set(perms_list)
     for p in perms_list:
         if "." in p:
@@ -351,7 +354,7 @@ def require_role(role: str):
 
 
 def verify_tenant_scope(principal: Principal, target_tenant_id: str) -> None:
-    """Enforce that operations on a resource strictly match the authenticated principal's server-side tenant memberships."""
+    """Require resources to match the principal's server-side tenant memberships."""
     # 1. Primary tenant check
     if principal.tenant_id == target_tenant_id:
         return

@@ -192,7 +192,10 @@ async def share_document_endpoint(
     if not target_project or target_project.tenant_id != principal.tenant_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Target project does not belong to your organization. Cross-organization sharing is forbidden.",
+            detail=(
+                "Target project does not belong to your organization. "
+                "Cross-organization sharing is forbidden."
+            ),
         )
 
     # If target environment specified, validate it belongs to target project and organization
@@ -247,9 +250,7 @@ async def list_document_shares_endpoint(
     return list_document_shares(principal.tenant_id, document_id)
 
 
-@router.delete(
-    "/documents/{document_id}/shares/{share_id}", status_code=status.HTTP_204_NO_CONTENT
-)
+@router.delete("/documents/{document_id}/shares/{share_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_document_share_endpoint(
     document_id: str,
     share_id: str,

@@ -257,7 +257,10 @@ async def accept_invitation(
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="This invitation is addressed to a different email account. Sign in with the invited account.",
+            detail=(
+                "This invitation is addressed to a different email account. "
+                "Sign in with the invited account."
+            ),
         )
 
     # Sync user in DB

@@ -39,7 +39,10 @@ class PolicyEngine:
             return PolicyDecision(
                 allowed=False,
                 require_human_approval=False,
-                reason="FAIL CLOSED: Required governance controls are unavailable for infrastructure mutation.",
+                reason=(
+                    "FAIL CLOSED: Required governance controls are unavailable "
+                    "for infrastructure mutation."
+                ),
                 risk=risk,
             )
 
@@ -49,7 +52,10 @@ class PolicyEngine:
                 return PolicyDecision(
                     allowed=False,
                     require_human_approval=False,
-                    reason=f"DENIED: Principal tenant '{principal.tenant_id}' does not match target tenant '{target_tenant_id}'.",
+                    reason=(
+                        f"DENIED: Principal tenant '{principal.tenant_id}' does not "
+                        f"match target tenant '{target_tenant_id}'."
+                    ),
                     risk=risk,
                 )
 
@@ -69,7 +75,10 @@ class PolicyEngine:
                     return PolicyDecision(
                         allowed=False,
                         require_human_approval=False,
-                        reason=f"DENIED: Principal '{principal.subject}' lacks required permission '{required_permission}'.",
+                        reason=(
+                            f"DENIED: Principal '{principal.subject}' lacks required "
+                            f"permission '{required_permission}'."
+                        ),
                         risk=risk,
                     )
 
@@ -90,7 +99,10 @@ class PolicyEngine:
             return PolicyDecision(
                 allowed=True,
                 require_human_approval=True,
-                reason="CRITICAL production action requires explicit human approval and dual-authorization.",
+                reason=(
+                    "CRITICAL production action requires explicit human approval "
+                    "and dual-authorization."
+                ),
                 risk=risk,
             )
 

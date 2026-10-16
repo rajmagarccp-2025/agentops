@@ -468,7 +468,6 @@ async def switch_context(
 
     tenant_memberships = MembershipRepository().get_tenant_memberships_for_user(db, user.id)
 
-    settings = get_settings()
     new_token = issue_user_token(
         subject=user.subject,
         email=user.email,
@@ -610,7 +609,10 @@ class ForgotPasswordRequest(BaseModel):
 async def forgot_password(req: ForgotPasswordRequest) -> dict[str, str]:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Password reset delivery is not configured. Use the identity provider's recovery flow or contact an administrator.",
+        detail=(
+            "Password reset delivery is not configured. Use the identity provider's "
+            "recovery flow or contact an administrator."
+        ),
     )
 
 
@@ -623,12 +625,18 @@ class ResetPasswordRequest(BaseModel):
 async def reset_password(req: ResetPasswordRequest) -> dict[str, str]:
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="Password reset is not configured for this deployment. Use the identity provider's recovery flow or contact an administrator.",
+        detail=(
+            "Password reset is not configured for this deployment. Use the identity "
+            "provider's recovery flow or contact an administrator."
+        ),
     )
 
 
-def _seed_demo_sample_data(tenant_id: str, project_id: str, environment_id: str, subject: str) -> None:
+def _seed_demo_sample_data(
+    tenant_id: str, project_id: str, environment_id: str, subject: str
+) -> None:
     from datetime import UTC, date, datetime
+
     from platform_api.changes.repository import change_repository
     from platform_api.changes.schemas import ChangeEventCreate, ChangeType
     from platform_api.finops.repository import finops_repository
@@ -639,7 +647,8 @@ def _seed_demo_sample_data(tenant_id: str, project_id: str, environment_id: str,
     from platform_api.inventory.schemas import InventoryResource, ResourceKind
     from platform_api.inventory.service import inventory_repository
     from platform_api.rag_service.schemas import DocumentCreate, DocumentType
-    from platform_api.rag_service.service import ingest_document, repository as rag_repo
+    from platform_api.rag_service.service import ingest_document
+    from platform_api.rag_service.service import repository as rag_repo
 
     now = datetime.now(UTC)
 
@@ -679,8 +688,14 @@ def _seed_demo_sample_data(tenant_id: str, project_id: str, environment_id: str,
                 service="redis-cache",
                 environment="Staging",
                 started_at=now,
-                summary="Staging redis cache memory usage crossed 85% threshold with key eviction spikes.",
-                description="Staging redis cache memory usage crossed 85% threshold with key eviction spikes.",
+                summary=(
+                    "Staging redis cache memory usage crossed 85% threshold "
+                    "with key eviction spikes."
+                ),
+                description=(
+                    "Staging redis cache memory usage crossed 85% threshold "
+                    "with key eviction spikes."
+                ),
                 source="aws-cloudwatch",
             ),
         )
@@ -840,7 +855,11 @@ def _seed_demo_sample_data(tenant_id: str, project_id: str, environment_id: str,
             DocumentCreate(
                 source="docs/runbooks/checkout-api-504.md",
                 title="SRE Incident Response Runbook: Checkout API Latency Degradation",
-                content="Runbook for investigating checkout-api 504 gateway timeouts. Check upstream connection pool, database slow query log, and roll back deployment if v2.18.4 was recently deployed.",
+                content=(
+                    "Runbook for investigating checkout-api 504 gateway timeouts. "
+                    "Check upstream connection pool, database slow query log, and roll "
+                    "back deployment if v2.18.4 was recently deployed."
+                ),
                 document_type=DocumentType.RUNBOOK,
                 scope="project",
                 service="checkout-api",
@@ -856,7 +875,11 @@ def _seed_demo_sample_data(tenant_id: str, project_id: str, environment_id: str,
             DocumentCreate(
                 source="docs/arch/prod-ha.md",
                 title="Production Architecture & High Availability Invariants",
-                content="Production architecture specifications. Cross-region failover, pgvector indexing, Keycloak OIDC authentication, and MCP isolation guidelines.",
+                content=(
+                    "Production architecture specifications. Cross-region failover, "
+                    "pgvector indexing, Keycloak OIDC authentication, and MCP isolation "
+                    "guidelines."
+                ),
                 document_type=DocumentType.ARCHITECTURE,
                 scope="project",
                 service="platform",

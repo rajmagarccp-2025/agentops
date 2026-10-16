@@ -123,7 +123,10 @@ async def create_cloud_integration(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="An integration for this provider and account already exists in this environment.",
+            detail=(
+                "An integration for this provider and account already exists "
+                "in this environment."
+            ),
         ) from exc
     return _record(model)
 
