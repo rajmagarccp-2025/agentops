@@ -1,16 +1,16 @@
-name: Deploy to GCP
+name: Deploy AgentOps to GCP
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       environment:
         description: Target environment
         required: true
-        default: dev
+        default: prod
         type: choice
         options:
-          - dev
-          - staging
           - prod
       image_tag:
         description: Container image tag to deploy
@@ -22,16 +22,63 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  GCP_PROJECT_ID: project-cks-aug2026
+  GCP_REGION: us-central1
+  GCP_CLUSTER_NAME: agentops-platform-prod
+  GCP_REPOSITORY: agentops-platform-prod
+  GCP_NAMESPACE: prod
+  SERVICE_ACCOUNT_NAME: agentops-platform-sa-gcp
+  TF_VAR_project_id: project-cks-aug2026
+  TF_VAR_project_name: agentops-platform
+  TF_VAR_environment: prod
+  TF_VAR_region: us-central1
+  TF_VAR_namespace: prod
+  TF_VAR_service_account_name: agentops-platform-sa-gcp
+
 jobs:
+  infra:
+    name: Provision GCP infra with Terraform
+    runs-on: ubuntu-latest
+    environment: prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+
+      - name: Terraform init and apply
+        working-directory: infrastructure/terraform/gcp
+        env:
+          TF_VAR_database_password: ${{ secrets.TF_DATABASE_PASSWORD }}
+        run: |
+          terraform init -backend=false
+          terraform validate
+          terraform apply -auto-approve \
+            -var="project_id=${{ env.GCP_PROJECT_ID }}" \
+            -var="project_name=${{ env.TF_VAR_project_name }}" \
+            -var="environment=${{ env.TF_VAR_environment }}" \
+            -var="region=${{ env.GCP_REGION }}" \
+            -var="namespace=${{ env.GCP_NAMESPACE }}" \
+            -var="service_account_name=${{ env.SERVICE_ACCOUNT_NAME }}" \
+            -var="database_password=${{ secrets.TF_DATABASE_PASSWORD }}"
+
   build-push:
     name: Build and push container images
+    needs: infra
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: prod
     env:
-      GAR_LOCATION: us-central1
-      GAR_REPOSITORY: agentic-platform-${{ inputs.environment }}
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      IMAGE_TAG: ${{ inputs.image_tag }}
+      IMAGE_TAG: ${{ github.sha || inputs.image_tag || 'latest' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,28 +93,30 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker "$GAR_LOCATION-docker.pkg.dev" --quiet
+        run: gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
 
       - name: Build and push API image
         run: |
-          docker build -t "$GAR_LOCATION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/platform-api:$IMAGE_TAG" -f docker/backend.Dockerfile .
-          docker push "$GAR_LOCATION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/platform-api:$IMAGE_TAG"
+          docker build -t "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-api:$IMAGE_TAG" -f docker/backend.Dockerfile .
+          docker push "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-api:$IMAGE_TAG"
 
       - name: Build and push worker image
         run: |
-          docker build -t "$GAR_LOCATION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/platform-worker:$IMAGE_TAG" -f docker/worker.Dockerfile .
-          docker push "$GAR_LOCATION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/platform-worker:$IMAGE_TAG"
+          docker build -t "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-worker:$IMAGE_TAG" -f docker/worker.Dockerfile .
+          docker push "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-worker:$IMAGE_TAG"
 
       - name: Build and push frontend image
         run: |
-          docker build -t "$GAR_LOCATION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/platform-frontend:$IMAGE_TAG" -f docker/frontend.Dockerfile .
-          docker push "$GAR_LOCATION-docker.pkg.dev/$GCP_PROJECT_ID/$GAR_REPOSITORY/platform-frontend:$IMAGE_TAG"
+          docker build -t "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-frontend:$IMAGE_TAG" -f docker/frontend.Dockerfile .
+          docker push "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-frontend:$IMAGE_TAG"
 
   deploy:
-    name: Deploy to GKE
+    name: Deploy app to GKE
     needs: build-push
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: prod
+    env:
+      IMAGE_TAG: ${{ github.sha || inputs.image_tag || 'latest' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,21 +132,27 @@ jobs:
 
       - name: Get cluster credentials
         run: |
-          gcloud container clusters get-credentials "agentic-platform-${{ inputs.environment }}" \
-            --region us-central1 \
-            --project "${{ secrets.GCP_PROJECT_ID }}"
+          gcloud container clusters get-credentials "$GCP_CLUSTER_NAME" \
+            --region "$GCP_REGION" \
+            --project "$GCP_PROJECT_ID"
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
 
-      - name: Deploy chart
+      - name: Deploy Helm chart
         run: |
-          helm upgrade --install platform deployment/helm/platform \
-            --namespace platform-${{ inputs.environment }} \
+          helm upgrade --install agentops-platform deployment/helm/platform \
+            --namespace "$GCP_NAMESPACE" \
             --create-namespace \
             --values deployment/helm/platform/values-gcp.yaml \
-            --set global.environment=${{ inputs.environment }} \
-            --set api.image.tag=${{ inputs.image_tag }} \
-            --set worker.image.tag=${{ inputs.image_tag }} \
-            --set frontend.image.tag=${{ inputs.image_tag }} \
+            --set global.environment=production \
+            --set namespace="$GCP_NAMESPACE" \
+            --set serviceAccount.name="$SERVICE_ACCOUNT_NAME" \
+            --set-string serviceAccount.annotations."iam.gke.io/gcp-service-account"="$SERVICE_ACCOUNT_NAME@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
+            --set api.image.repository="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-api" \
+            --set api.image.tag="$IMAGE_TAG" \
+            --set worker.image.repository="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-worker" \
+            --set worker.image.tag="$IMAGE_TAG" \
+            --set frontend.image.repository="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-frontend" \
+            --set frontend.image.tag="$IMAGE_TAG" \
             --wait --timeout 10m

@@ -3,13 +3,13 @@ global:
   cloudProvider: gcp
   clusterDomain: cluster.local
 
-namespace: platform-prod
+namespace: prod
 
 serviceAccount:
   create: true
-  name: platform-sa-gcp
+  name: agentops-platform-sa-gcp
   annotations:
-    iam.gke.io/gcp-service-account: "platform-sa-gcp@PROJECT_ID.iam.gserviceaccount.com"
+    iam.gke.io/gcp-service-account: "agentops-platform-sa-gcp@project-cks-aug2026.iam.gserviceaccount.com"
 
 ingress:
   className: gce

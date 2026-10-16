@@ -7,25 +7,17 @@ spec:
   generators:
     - list:
         elements:
-          - env: dev
+          - env: prod
             cloud: gcp
             valuesFile: values-gcp.yaml
-            namespace: platform-dev
-          - env: staging
-            cloud: gcp
-            valuesFile: values-gcp.yaml
-            namespace: platform-staging
-          - env: production
-            cloud: gcp
-            valuesFile: values-gcp.yaml
-            namespace: platform-prod
+            namespace: prod
   template:
     metadata:
-      name: 'platform-{{env}}-{{cloud}}'
+      name: 'agentops-platform-{{env}}-{{cloud}}'
     spec:
       project: platform-project
       source:
-        repoURL: https://github.com/<your-org>/<your-repo>.git
+        repoURL: https://github.com/rajmagarccp-2025/agentops.git
         targetRevision: main
         path: deployment/helm/platform
         helm:
