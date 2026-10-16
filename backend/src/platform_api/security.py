@@ -136,14 +136,28 @@ def _decode_token(token: str) -> dict[str, Any]:
                 last_error = exc
                 continue
 
+        if last_error is not None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    "Invalid or expired OIDC access token: "
+                    f"{last_error}"
+                ),
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from last_error
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
+<<<<<<< HEAD
             detail=(
                 "Invalid or expired OIDC access token: "
                 f"{last_error or 'Keycloak JWKS resolution failed'}"
             ),
+=======
+            detail="Invalid or expired OIDC access token: Keycloak JWKS resolution failed",
+>>>>>>> ba111f424d5914bdfb86d71c9c5b059719ee8290
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
 
     # 2. Otherwise default to configured jwt_demo_secret (HS256)
     try:

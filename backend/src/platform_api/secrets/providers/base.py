@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import ipaddress
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -98,3 +99,6 @@ class BaseSecretProviderAdapter(ABC):
     @abstractmethod
     def delete_secret(self, secret_name: str, version_ref: str | None = None) -> bool:
         pass
+=======
+(full file content here)
+>>>>>>> ba111f424d5914bdfb86d71c9c5b059719ee8290

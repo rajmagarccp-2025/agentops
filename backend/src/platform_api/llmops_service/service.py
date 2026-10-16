@@ -150,7 +150,6 @@ def _resolve_effective_permissions(
 
 # --- Model Management Service ---
 
-
 def test_provider_credentials(payload: TestCredentialRequest) -> TestConnectionResponse:
     adapter = get_provider_adapter(
         provider_name=payload.provider,
@@ -487,7 +486,6 @@ def delete_registered_model(db: Session, principal: Principal, model_id: str) ->
 
 # --- Model Administrator & Ownership Management ---
 
-
 def assign_model_administrator(
     db: Session, principal: Principal, model_id: str, target_user_id: str
 ) -> ModelAdminResponse:
@@ -604,7 +602,6 @@ def list_model_administrators(
 
 # --- Model Access Policy Management ---
 
-
 def create_model_access_policy(
     db: Session, principal: Principal, model_id: str, payload: ModelAccessPolicyCreate
 ) -> ModelAccessPolicyResponse:
@@ -680,7 +677,6 @@ def delete_model_access_policy(db: Session, principal: Principal, policy_id: str
 
 # --- User Group Service ---
 
-
 def create_user_group(db: Session, principal: Principal, payload: GroupCreate) -> GroupResponse:
     slug = payload.slug or payload.name.lower().replace(" ", "-")
     group = Group(
@@ -732,7 +728,6 @@ def add_user_to_group(
 
 
 # --- Mandatory Identity & Scope Authorization Engine ---
-
 
 def invoke_chat_completion(
     db: Session, principal: Principal, request: GatewayChatCompletionRequest
@@ -809,8 +804,14 @@ def invoke_chat_completion(
             api_key = secret_val_resp.value
         except Exception as exc:
             logger.warning(
+<<<<<<< HEAD
                 f"Could not resolve secret value for model {model.id}, "
                 f"falling back to adapter default: {exc}"
+=======
+                "Could not resolve secret for model %s; falling back to adapter default: %s",
+                model.id,
+                exc,
+>>>>>>> ba111f424d5914bdfb86d71c9c5b059719ee8290
             )
 
     # 6. Select Provider Adapter & Execute
@@ -864,7 +865,6 @@ def invoke_chat_completion(
 
 
 # --- Helper Serialization Functions ---
-
 
 def _to_model_response(
     db: Session, principal: Principal, model: RegisteredModel
@@ -920,7 +920,6 @@ def _to_policy_response(policy: ModelAccessPolicy) -> ModelAccessPolicyResponse:
 
 
 # --- Retained Legacy Functions for Compatibility ---
-
 
 def create_prompt(tenant_id: str, payload: PromptVersionCreate) -> PromptVersion:
     prompt = PromptVersion(

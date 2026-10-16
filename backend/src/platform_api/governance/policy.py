@@ -36,13 +36,21 @@ class PolicyEngine:
             "restart",
         }
         if not controls_available and is_mutation:
+            reason = (
+                "FAIL CLOSED: Required governance controls are unavailable "
+                "for infrastructure mutation."
+            )
             return PolicyDecision(
                 allowed=False,
                 require_human_approval=False,
+<<<<<<< HEAD
                 reason=(
                     "FAIL CLOSED: Required governance controls are unavailable "
                     "for infrastructure mutation."
                 ),
+=======
+                reason=reason,
+>>>>>>> ba111f424d5914bdfb86d71c9c5b059719ee8290
                 risk=risk,
             )
 
