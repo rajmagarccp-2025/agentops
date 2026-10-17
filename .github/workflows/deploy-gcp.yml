@@ -204,6 +204,8 @@ jobs:
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
+        with:
+          install_components: gke-gcloud-auth-plugin
 
       - name: Get cluster credentials
         run: |
