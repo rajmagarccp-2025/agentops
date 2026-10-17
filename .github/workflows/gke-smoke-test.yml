@@ -1,5 +1,4 @@
 name: GKE Deployment Smoke Test
-
 on:
   workflow_dispatch:
     inputs:
