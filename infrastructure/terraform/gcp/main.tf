@@ -271,8 +271,8 @@ resource "google_pubsub_subscription_iam_member" "platform_events_subscriber" {
 }
 
 resource "google_secret_manager_secret_iam_member" "platform_secret_accessor" {
-  for_each  = google_secret_manager_secret.platform
-  secret_id = each.value.id
+  for_each  = local.platform_secret_ids
+  secret_id = google_secret_manager_secret.platform[each.value].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.platform.email}"
 }
