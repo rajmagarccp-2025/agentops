@@ -17,6 +17,11 @@ on:
         required: true
         default: latest
         type: string
+      deploy_application:
+        description: Deploy the application after infrastructure and images are ready
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: agentops-gcp-prod
@@ -188,6 +193,7 @@ jobs:
   deploy:
     name: Deploy app to GKE
     needs: [infra, build-push]
+    if: ${{ inputs.deploy_application == true || vars.DEPLOY_APPLICATION == 'true' }}
     runs-on: ubuntu-latest
     environment: prod
     env:
@@ -231,6 +237,24 @@ jobs:
           : "${OIDC_ISSUER_URL:?Set OIDC_ISSUER_URL in the prod environment}"
           : "${OIDC_CLIENT_ID:?Set OIDC_CLIENT_ID in the prod environment}"
           : "${OIDC_CLIENT_SECRET:?Set OIDC_CLIENT_SECRET in the prod environment}"
+          case "$OIDC_ISSUER_URL" in
+            https://*) ;;
+            *)
+              echo "OIDC_ISSUER_URL must use HTTPS and be reachable by production users."
+              exit 1
+              ;;
+          esac
+          case "$OIDC_ISSUER_URL" in
+            *localhost*|*127.0.0.1*)
+              echo "OIDC_ISSUER_URL must not point to a local development service."
+              exit 1
+              ;;
+          esac
+          issuer_metadata="$(curl --fail --silent --show-error --location \
+            --retry 5 --retry-delay 10 \
+            "$OIDC_ISSUER_URL/.well-known/openid-configuration")"
+          printf '%s' "$issuer_metadata" | jq -e --arg issuer "$OIDC_ISSUER_URL" \
+            '.issuer == $issuer' >/dev/null
 
           encoded_password="$(python -c 'import os; from urllib.parse import quote; print(quote(os.environ["TF_DATABASE_PASSWORD"], safe=""))')"
           database_url="postgresql+psycopg://platform:${encoded_password}@${DATABASE_PRIVATE_IP}:5432/agentops?sslmode=require"

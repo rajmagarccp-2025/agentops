@@ -147,6 +147,13 @@ tofu plan \
   application does not yet contain production GCP adapters for GCS, Pub/Sub,
   Secret Manager, KMS, or Vertex AI; adding those client integrations and
   end-to-end adapter tests remains separate application work.
+- Terraform does not currently provision Keycloak, Kong Gateway, public DNS,
+  or TLS certificates. The GCP Helm values intentionally leave ingress disabled;
+  production DNS, the approved gateway, certificates, and Keycloak realm/client
+  bootstrap must be automated before the platform is publicly reachable.
+- Application rollout is opt-in in the GCP workflow and checks the configured
+  OIDC issuer's HTTPS discovery endpoint. This prevents rollout with a local or
+  unreachable issuer but does not provision the identity provider itself.
 - For production, protect the state bucket and restrict the GitHub deploy
   service account to the required state, infrastructure, registry, and GKE
   permissions.
