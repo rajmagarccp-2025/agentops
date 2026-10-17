@@ -140,6 +140,7 @@ tofu plan \
 - The deployment keeps provider-specific resources isolated under `infrastructure/terraform/gcp`.
 - Workload Identity binds the Kubernetes service account to the GCP service account using the `namespace` and `service_account_name` variables.
 - Private networking is enabled for Cloud SQL and Redis so the app runs inside the VPC rather than exposing public database endpoints.
+- Cloud SQL uses the `ALWAYS` activation policy so it is running when OpenTofu manages its database and user. Manually stopping it is drift; the next apply will start it again, and the instance continues to incur compute charges while running.
 - The remote state bucket is bootstrap infrastructure managed by the workflow's
   idempotent `gcloud storage` step and is intentionally separate from the
   application artifact bucket managed by OpenTofu.

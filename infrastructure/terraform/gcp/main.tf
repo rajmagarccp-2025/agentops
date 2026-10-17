@@ -333,6 +333,7 @@ resource "google_sql_database_instance" "platform" {
   settings {
     tier              = var.environment == "prod" ? "db-custom-4-15360" : "db-f1-micro"
     availability_type = var.environment == "prod" ? "REGIONAL" : "ZONAL"
+    activation_policy = "ALWAYS"
     disk_size         = var.environment == "prod" ? 200 : 50
     disk_type         = "PD_SSD"
     disk_autoresize   = true
