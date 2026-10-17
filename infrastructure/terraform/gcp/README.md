@@ -127,7 +127,8 @@ tofu plan \
 - Secret Manager secret containers for database, Redis, JWT, and OIDC runtime
   settings (the deploy workflow publishes secret versions)
 - Cloud KMS key for application encryption integrations
-- Cloud SQL for PostgreSQL with pgvector enabled
+- Cloud SQL for PostgreSQL; enable pgvector in the application database with
+  `CREATE EXTENSION IF NOT EXISTS vector;`
 - Memorystore Redis instance
 - Workload Identity service account binding
 - Runtime IAM bindings for Vertex AI, Pub/Sub, GCS, Secret Manager, KMS,

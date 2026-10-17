@@ -250,6 +250,8 @@ resource "google_service_account_iam_member" "workload_identity_user" {
   service_account_id = google_service_account.platform.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project_id}.svc.id.goog[${var.namespace}/${var.service_account_name}]"
+
+  depends_on = [google_container_cluster.platform]
 }
 
 resource "google_storage_bucket_iam_member" "platform_object_user" {
@@ -334,11 +336,6 @@ resource "google_sql_database_instance" "platform" {
     disk_size         = var.environment == "prod" ? 200 : 50
     disk_type         = "PD_SSD"
     disk_autoresize   = true
-
-    database_flags {
-      name  = "cloudsql.enable_pgvector"
-      value = "on"
-    }
 
     backup_configuration {
       enabled                        = true
