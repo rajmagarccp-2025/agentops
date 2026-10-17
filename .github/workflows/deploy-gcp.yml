@@ -188,7 +188,6 @@ jobs:
   deploy:
     name: Deploy app to GKE
     needs: [infra, build-push]
-    if: vars.DEPLOY_APPLICATION == 'true'
     runs-on: ubuntu-latest
     environment: prod
     env:
