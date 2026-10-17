@@ -45,7 +45,7 @@ It uses GitHub OIDC Workload Identity Federation to authenticate to Google Cloud
 publishes the API, worker, and frontend images to Artifact Registry before upgrading the
 Helm release on the target GKE cluster.
 
-Required repository secrets:
+Required `prod` environment secrets:
 
 - `GCP_WORKLOAD_IDENTITY_PROVIDER`
 - `GCP_SERVICE_ACCOUNT`
@@ -55,14 +55,41 @@ Required repository secrets:
 - `OIDC_CLIENT_ID`
 - `OIDC_CLIENT_SECRET`
 
-The workflow uses the GitHub Actions environment named `prod`. Add these as
-environment secrets under **Settings → Environments → prod**. It bootstraps a
-dedicated, versioned GCS bucket for OpenTofu state, provisions infrastructure,
-and builds/pushes the images. Application rollout is opt-in: set the workflow
-dispatch input `deploy_application` to `true`, or set the `DEPLOY_APPLICATION`
-Actions variable to `true` for automatic rollout on pushes to `main`. With the
-default setting, infrastructure and images are still provisioned, but the
-application is not rolled out.
+Add them as **environment secrets** under **Repository Settings → Environments
+→ `prod` → Environment secrets → Add secret**. The workflow targets this
+environment, so repository-level secrets or local `.env` files are not a
+substitute. Use these values:
+
+| Name | Value |
+| --- | --- |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full Workload Identity Provider resource name from GCP, such as `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID`. |
+| `GCP_SERVICE_ACCOUNT` | Service account email that the GitHub Actions workflow is allowed to impersonate. Workload Identity Federation is used; do not create or store a service-account JSON key. |
+| `TF_DATABASE_PASSWORD` | Password for the provisioned PostgreSQL user. |
+| `JWT_DEMO_SECRET` | A strong, randomly generated signing secret for the application. |
+| `OIDC_ISSUER_URL` | Exact HTTPS issuer URL for the production identity provider/realm. It must be reachable by the workflow and users; localhost is rejected. |
+| `OIDC_CLIENT_ID` | Client identifier registered with that identity provider. |
+| `OIDC_CLIENT_SECRET` | Client secret for that registered client. Treat it as confidential. |
+
+For each entry, select **Add secret**, enter the exact name and value, and save.
+Do not put real values in source control, example manifests, screenshots, or
+chat. The workflow reads these values from the `prod` environment and publishes
+the database URL, JWT secret, and OIDC settings to Google Secret Manager and the
+Kubernetes `platform-secrets` Secret during deployment.
+
+The workflow bootstraps a dedicated, versioned GCS bucket for OpenTofu state,
+provisions infrastructure, and builds/pushes the images. Application rollout is
+opt-in: set the workflow dispatch input `deploy_application` to `true`, or set
+the `DEPLOY_APPLICATION` Actions variable to `true` for automatic rollout on
+pushes to `main`. With the default setting, infrastructure and images are still
+provisioned, but the application is not rolled out.
+
+To check GKE access, scheduling, and Artifact Registry image pulls without
+rolling out the application or requiring OIDC runtime secrets, manually run
+`.github/workflows/gke-smoke-test.yml` with an existing image tag. It creates a
+temporary, private namespace and removes it after the check. This verifies
+cluster/image deployment plumbing only; it does not deploy or expose the app,
+test its runtime configuration, or replace the OIDC validation required for an
+application rollout.
 
 When rollout is enabled, the workflow verifies that `OIDC_ISSUER_URL` uses
 HTTPS and that its OpenID Connect discovery document is reachable and reports
