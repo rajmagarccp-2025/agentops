@@ -110,6 +110,9 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
       - name: Setup OpenTofu
         uses: opentofu/setup-opentofu@v1
         with:

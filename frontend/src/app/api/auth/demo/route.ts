@@ -54,6 +54,10 @@ export async function POST(request: NextRequest) {
       subject: user.subject,
       email: user.email,
       roles: [user.effective_role || "READ"],
+      permissions:
+        user.read_only_demo === true
+          ? ["security:read", "security.read", "audit:read", "audit.read"]
+          : [],
       tenant_id: user.active_organization_id || "",
       tenant_memberships: [],
       has_organization: user.has_organization,

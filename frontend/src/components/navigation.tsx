@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useWorkspace } from "../state/workspace-context";
-import { HierarchySwitcher } from "./hierarchy-switcher";
 
 type NavigationItem = { label: string; href: string; icon: string; exact?: boolean; nested?: boolean };
 type NavigationGroup = { label: string; items: NavigationItem[] };
@@ -53,8 +52,17 @@ export function Navigation() {
         ...(permissions.hasPermission("cloud:read") || permissions.hasPermission("inventory:read")
           ? [{ label: "Infrastructure & K8s", href: "/integrations", icon: "🔧" }]
           : []),
+        ...(permissions.hasPermission("cloud:read") || permissions.hasPermission("inventory:read")
+          ? [{ label: "Infrastructure Drift", href: "/infrastructure", icon: "🌀" }]
+          : []),
         ...(permissions.hasPermission("finops:read") ? [{ label: "FinOps & Cloud Spend", href: "/finops", icon: "💰" }] : []),
         ...(permissions.hasPermission("llm:read") ? [{ label: "LLMOps & Gateway", href: "/llmops", icon: "🧠" }] : []),
+        ...(permissions.hasPermission("observability:read")
+          ? [{ label: "Observability", href: "/observability", icon: "📈" }]
+          : []),
+        ...(permissions.hasPermission("tools:read")
+          ? [{ label: "Model Context Protocol", href: "/mcp", icon: "🔗" }]
+          : []),
         ...(permissions.hasPermission("rag:read") ? [
           { label: "Knowledge Base (RAG)", href: "/knowledge", icon: "📚" },
         ] : []),
@@ -66,6 +74,9 @@ export function Navigation() {
         ...(permissions.hasPermission("security:read") ? [{ label: "Security & RBAC", href: "/security", icon: "🛡️" }] : []),
         ...(permissions.hasPermission("organization:read") ? [{ label: "Multi-Tenancy & Orgs", href: "/multi-tenancy", icon: "🏢" }] : []),
         ...(permissions.hasPermission("project:read") ? [{ label: "Projects & Envs", href: "/projects", icon: "📁" }] : []),
+        ...(permissions.hasPermission("secrets:metadata:read")
+          ? [{ label: "Secrets", href: "/secrets", icon: "🔐" }]
+          : []),
         { label: "Settings & Audit Logs", href: "/settings", icon: "⚙️" },
       ],
     },
@@ -165,32 +176,6 @@ export function Navigation() {
             </small>
           </div>
         </Link>
-
-        {/* Active Context / Demo Hierarchy Card */}
-        <div
-          style={{
-            padding: "10px 14px",
-            margin: "0 0 20px",
-            background: "rgba(16, 185, 129, 0.05)",
-            borderRadius: "10px",
-            border: "1px solid rgba(16, 185, 129, 0.18)",
-          }}
-        >
-          <div style={{ fontSize: "9px", fontFamily: "'DM Mono', monospace", color: "#34d399", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: "600" }}>
-            {isDemoSession ? "ACTIVE DEMO HIERARCHY" : "ACTIVE CONTEXT SUMMARY"}
-          </div>
-          <div style={{ fontSize: "13px", fontWeight: "700", color: "#ffffff", marginTop: "4px" }}>
-            {activeOrg?.name || "Acme Corp"}
-          </div>
-          <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "2px" }}>
-            / {activeProject?.name || "AgentOps Core Plane"}
-          </div>
-          <div style={{ fontSize: "11px", color: "#34d399", fontFamily: "'DM Mono', monospace", marginTop: "2px" }}>
-            / {activeEnvironment?.name || "Production"} ({roleName || "Admin"})
-          </div>
-        </div>
-
-        <HierarchySwitcher />
 
         <nav id="primary-navigation" className="primary-navigation" aria-label="Primary navigation">
           {navigationGroups.map((group) => group.items.length > 0 && (

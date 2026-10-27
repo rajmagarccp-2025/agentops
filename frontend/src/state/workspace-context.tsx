@@ -268,7 +268,10 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   };
 
   const setActiveProject = async (proj: ProjectItem) => {
-    if (!activeOrg) return;
+    if (!activeOrg || proj.organization_id !== activeOrg.id) {
+      setWorkspaceError("Project is not available in the active organization.");
+      return;
+    }
     setWorkspaceError(null);
     setIsLoading(true);
     try {
@@ -295,7 +298,15 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   };
 
   const setActiveEnvironment = async (env: EnvironmentItem) => {
-    if (!activeOrg || !activeProject) return;
+    if (
+      !activeOrg ||
+      !activeProject ||
+      env.organization_id !== activeOrg.id ||
+      env.project_id !== activeProject.id
+    ) {
+      setWorkspaceError("Environment is not available in the active project.");
+      return;
+    }
     setWorkspaceError(null);
     setIsLoading(true);
     try {

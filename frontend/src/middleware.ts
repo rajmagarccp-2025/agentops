@@ -27,6 +27,18 @@ const PUBLIC_PATHS = [
 const hasAuthSession = (request: NextRequest) =>
   Boolean(request.cookies.get("platform_access_token")?.value && request.cookies.get("platform_session")?.value);
 
+const isReadOnlyDemoSession = (request: NextRequest) => {
+  const sessionCookie = request.cookies.get("platform_session")?.value;
+  if (!sessionCookie) return false;
+
+  try {
+    const session = JSON.parse(sessionCookie);
+    return session.read_only_demo === true;
+  } catch {
+    return false;
+  }
+};
+
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -42,7 +54,7 @@ export function middleware(request: NextRequest) {
   ) {
     // If authenticated user visits login or signup, redirect them to operations
     if (pathname === "/login" || pathname === "/signup") {
-      if (hasAuthSession(request)) {
+      if (hasAuthSession(request) && !isReadOnlyDemoSession(request)) {
         return NextResponse.redirect(new URL("/operations", request.url));
       }
     }
@@ -64,9 +76,10 @@ export function middleware(request: NextRequest) {
   try {
     const session = JSON.parse(sessionCookie);
     if (session.expires_at && session.expires_at < Date.now()) {
-      const loginUrl = new URL("/login", request.url);
-      loginUrl.searchParams.set("error", "session_expired");
-      const res = NextResponse.redirect(loginUrl);
+      const isDemoSession = session.read_only_demo === true;
+      const redirectUrl = new URL(isDemoSession ? "/demo" : "/login", request.url);
+      redirectUrl.searchParams.set(isDemoSession ? "expired" : "error", "session_expired");
+      const res = NextResponse.redirect(redirectUrl);
       res.cookies.delete("platform_access_token");
       res.cookies.delete("platform_session");
       return res;

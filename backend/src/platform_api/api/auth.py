@@ -465,6 +465,8 @@ async def switch_context(
     perms_list: list[str] = []
     for r in roles_list:
         perms_list.extend(list(ROLE_PERMISSIONS_MAP.get(r.upper(), [])))
+    if principal.read_only_demo:
+        perms_list.extend(["security:read", "security.read", "audit:read", "audit.read"])
 
     tenant_memberships = MembershipRepository().get_tenant_memberships_for_user(db, user.id)
 
@@ -914,21 +916,25 @@ async def demo_login(
             password="DemoPassword123!",
         )
 
-    tenants = TenantRepository().list_user_tenants(db, user.id)
-    if not tenants:
-        demo_tenant = TenantRepository().create_tenant(
+    tenant_repository = TenantRepository()
+    demo_tenant_slug = f"enterprise-systems-demo-{user.id[:8]}"
+    demo_tenant = tenant_repository.get_tenant_by_slug(db, demo_tenant_slug)
+    if not demo_tenant:
+        demo_tenant = tenant_repository.create_tenant(
             db,
             name="Enterprise Systems Corp (Demo)",
-            slug=f"enterprise-systems-demo-{user.id[:8]}",
+            slug=demo_tenant_slug,
             description="Autonomous SRE, FinOps & LLMOps Platform Demo Workspace",
             created_by=user.id,
         )
+    organization_membership = MembershipRepository().get_organization_membership(
+        db, demo_tenant.id, user.id
+    )
+    if not organization_membership:
         MembershipRepository().add_organization_member(
             db, tenant_id=demo_tenant.id, user_id=user.id, role_name="READ", is_owner=False
         )
-        tenants = [demo_tenant]
-
-    active_tenant = tenants[0]
+    active_tenant = demo_tenant
 
     # Ensure demo project exists
     all_projects = ProjectRepository().list_projects(db, active_tenant.id)
@@ -985,6 +991,7 @@ async def demo_login(
 
     roles_list = ["READ"]
     perms_list = list(ROLE_PERMISSIONS_MAP.get("READ", []))
+    perms_list.extend(["security:read", "security.read", "audit:read", "audit.read"])
 
     token = issue_user_token(
         subject=user.subject,

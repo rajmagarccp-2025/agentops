@@ -8,8 +8,12 @@ export function DemoTopBanner() {
   const pathname = usePathname();
   const { user } = useWorkspace();
 
-  // Show if user is in read-only demo mode or if pathname is /demo
-  const isDemo = Boolean(user?.read_only_demo) || pathname === "/demo" || pathname.startsWith("/demo/");
+  const isAuthPage = ["/login", "/signup", "/forgot-password", "/auth/callback"].includes(pathname);
+  const isDemo =
+    !isAuthPage &&
+    (pathname === "/demo" ||
+      pathname.startsWith("/demo/") ||
+      (Boolean(user?.read_only_demo) && pathname !== "/"));
 
   if (!isDemo) return null;
 

@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { DemoTopBanner } from "./demo-top-banner";
 import { Navigation } from "./navigation";
 import { SystemStatus } from "./system-status";
 import { ContextGuard } from "./context-guard";
@@ -206,7 +205,6 @@ export function AgentsExperience({ initialTab = "overview" }: { initialTab?: "ov
 
   return (
     <div className="shell" style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
-      <DemoTopBanner />
       <div style={{ display: "flex", flex: 1, minWidth: 0 }}>
         <Navigation />
         <div className="main" style={{ flex: 1, minWidth: 0, background: "#060b14" }}>

@@ -91,8 +91,9 @@ export const ROLE_PERMISSIONS: Record<string, string[]> = {
     "organization.read",
     "project.read",
     "environment.read",
-    "agents.read", "rag.read",
+    "agents.read", "rag.read", "tools.read", "tools:read",
     "data.read",
+    "secrets.metadata.read", "secrets:metadata:read",
     "dashboard.read", "report.read",
     "ai.read", "incidents.read", "inventory.read", "finops.read", "changes.read",
     "remediation.read", "llm.read", "learning.read", "cloud.read", "observability.read",
@@ -141,6 +142,12 @@ export class PermissionEngine {
     const basePermissions = ROLE_PERMISSIONS[this.userRole] || ROLE_PERMISSIONS.READ;
     this.customPermissions = new Set(basePermissions);
 
+    if (this.isReadOnlyDemo) {
+      ["security.read", "security:read", "audit.read", "audit:read"].forEach((permission) =>
+        this.customPermissions.add(permission),
+      );
+    }
+
     // Merge any explicit permissions
     if (session?.permissions && !this.isReadOnlyDemo) {
       session.permissions.forEach((p) => this.customPermissions.add(p));
@@ -156,10 +163,7 @@ export class PermissionEngine {
     const dotted = permission.replace(":", ".");
     const coloned = permission.replace(".", ":");
     const action = permission.split(/[.:]/).at(-1)?.toLowerCase();
-    if (
-      this.isReadOnlyDemo &&
-      ["write", "create", "update", "delete", "manage", "invite", "remove", "role_change", "execute", "approve", "run", "invoke", "evaluate", "verify"].includes(action || "")
-    ) {
+    if (this.isReadOnlyDemo && action !== "read") {
       return false;
     }
     return (
@@ -184,31 +188,41 @@ export class PermissionEngine {
   }
 
   canManageMembers(_resource?: string): boolean {
-    return this.hasPermission("member.invite") || this.hasPermission("member.remove") || this.userRole === "ADMIN";
+    return !this.isReadOnlyDemo && (
+      this.hasPermission("member.invite") || this.hasPermission("member.remove") || this.userRole === "ADMIN"
+    );
   }
 
   canManageProject(_resource?: string): boolean {
-    return this.hasPermission("project.manage") || this.hasPermission("project.create") || this.userRole === "ADMIN";
+    return !this.isReadOnlyDemo && (
+      this.hasPermission("project.manage") || this.hasPermission("project.create") || this.userRole === "ADMIN"
+    );
   }
 
   canManageEnvironment(_resource?: string): boolean {
-    return this.hasPermission("environment.manage") || this.hasPermission("environment.create") || this.userRole === "ADMIN";
+    return !this.isReadOnlyDemo && (
+      this.hasPermission("environment.manage") || this.hasPermission("environment.create") || this.userRole === "ADMIN"
+    );
   }
 
   canAskAI(_resource?: string): boolean {
-    return this.hasPermission("ai.query") && this.userRole !== "READ";
+    return !this.isReadOnlyDemo && this.hasPermission("ai.query") && this.userRole !== "READ";
   }
 
   canDeleteProject(_resource?: string): boolean {
-    return this.hasPermission("project.delete") || this.userRole === "ADMIN";
+    return !this.isReadOnlyDemo && (
+      this.hasPermission("project.delete") || this.userRole === "ADMIN"
+    );
   }
 
   canDeleteOrganization(_resource?: string): boolean {
-    return this.isOwner;
+    return !this.isReadOnlyDemo && this.isOwner;
   }
 
   canManageOrganization(_resource?: string): boolean {
-    return this.hasPermission("organization.write") || this.isOwner || this.userRole === "ADMIN" || this.userRole === "OWNER";
+    return !this.isReadOnlyDemo && (
+      this.hasPermission("organization.write") || this.isOwner || this.userRole === "ADMIN" || this.userRole === "OWNER"
+    );
   }
 }
 

@@ -2,69 +2,47 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { DemoTopBanner } from "../../components/demo-top-banner";
 import { Navigation } from "../../components/navigation";
 import { SystemStatus } from "../../components/system-status";
 import { ContextGuard } from "../../components/context-guard";
 import { GlobalContextSelector } from "../../components/global-context-selector";
 import {
-  fetchApprovals,
-  fetchAgentRuns,
-  fetchChanges,
   fetchFinOpsSummary,
-  fetchHealth,
   fetchIncidents,
-  fetchInventory,
   fetchLLMTelemetry,
-  fetchRagDocuments,
-  type AgentRunListItem,
-  type ApprovalRequest,
-  type ChangeEvent,
   type FinOpsSummary,
-  type HealthResponse,
   type Incident,
-  type InventoryResource,
   type LLMTelemetry,
-  type RagDocument,
 } from "../../lib/api";
 import { useWorkspace } from "../../state/workspace-context";
 
 type OverviewState = {
-  approvals: ApprovalRequest[] | null;
   finops: FinOpsSummary;
   incidents: Incident[];
-  inventory: InventoryResource[];
-  health: HealthResponse;
-  changes: ChangeEvent[];
-  agentRuns: AgentRunListItem[];
-  ragDocuments: RagDocument[];
   llmTelemetry: LLMTelemetry[];
 };
 
 export default function HomePage() {
-  const { currentOrg, currentProject, currentEnv, projects, environments, effectiveRole, userEmail, permissions, isContextComplete } = useWorkspace();
+  const { currentOrg, currentProject, currentEnv, isContextComplete, user } = useWorkspace();
   const [overview, setOverview] = useState<OverviewState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const canViewApprovals = permissions.canManageOrganization();
-  const canViewAgents = permissions.hasPermission("agents:read");
+  const isDemoMode = user?.read_only_demo === true;
+  const totalLlmTokens = overview?.llmTelemetry.reduce(
+    (total, item) => total + item.input_tokens + item.output_tokens,
+    0,
+  ) ?? 0;
   const loadOverview = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
-      const [approvals, finops, incidents, inventory, health, changes, agentRuns, ragDocuments, llmTelemetry] = await Promise.all([
-        canViewApprovals ? fetchApprovals(signal) : Promise.resolve(null),
+      const [finops, incidents, llmTelemetry] = await Promise.all([
         fetchFinOpsSummary(signal),
         fetchIncidents(signal),
-        fetchInventory(signal),
-        fetchHealth(signal),
-        fetchChanges(signal),
-        canViewAgents ? fetchAgentRuns(signal) : Promise.resolve([]),
-        fetchRagDocuments(signal),
         fetchLLMTelemetry(signal),
       ]);
-      setOverview({ approvals, finops, incidents, inventory, health, changes, agentRuns, ragDocuments, llmTelemetry });
+      setOverview({ finops, incidents, llmTelemetry });
     } catch (err: unknown) {
       if (signal?.aborted) return;
       setError(err instanceof Error ? err.message : "Unable to load operational data.");
@@ -72,7 +50,7 @@ export default function HomePage() {
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [canViewApprovals, canViewAgents]);
+  }, []);
 
   useEffect(() => {
     if (!isContextComplete) return;
@@ -82,20 +60,12 @@ export default function HomePage() {
   }, [currentEnv?.id, currentOrg?.id, currentProject?.id, isContextComplete, loadOverview]);
 
   const openIncidents = overview?.incidents.filter((incident) => incident.status !== "resolved") ?? [];
-  const pendingApprovals = overview?.approvals?.filter((request) => request.status === "pending") ?? [];
   const recentIncidents = [...openIncidents]
     .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
     .slice(0, 5);
-  const recentChanges = [...(overview?.changes ?? [])]
-    .sort((a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at))
-    .slice(0, 5);
-  const contextualRuns = (overview?.agentRuns ?? []).filter(
-    (run) => run.project_id === currentProject?.id && run.environment === currentEnv?.name,
-  ).slice(0, 5);
 
   return (
     <div className="shell" style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
-      <DemoTopBanner />
       <div style={{ display: "flex", flex: 1, minWidth: 0 }}>
         <Navigation />
         <div className="main" style={{ flex: 1, minWidth: 0, background: "#060b14" }}>
@@ -113,6 +83,7 @@ export default function HomePage() {
 
           <main className="main-content" style={{ padding: "32px 40px", maxWidth: "1600px" }}>
             <ContextGuard featureName="Operations overview">
+              <GlobalContextSelector />
               <section className="page-heading page-heading-dashboard" style={{ marginBottom: "28px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "16px" }}>
                 <div>
                   <div style={{ color: "#34d399", fontFamily: "'DM Mono', monospace", fontSize: "11px", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: "600", marginBottom: "6px" }}>
@@ -160,10 +131,8 @@ export default function HomePage() {
               <>
                 {/* 6 Metric Cards matching Image 1 */}
                 <section
+                  className="metrics"
                   style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(4, 1fr)",
-                    gap: "16px",
                     marginBottom: "24px",
                   }}
                 >
@@ -180,11 +149,11 @@ export default function HomePage() {
                       Cluster CPU Load
                     </div>
                     <div style={{ fontSize: "32px", fontWeight: "800", color: "#ffffff", letterSpacing: "-0.03em", marginBottom: "8px" }}>
-                      68%
+                      {isDemoMode ? "68%" : "—"}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#34d399", fontWeight: "600" }}>
                       <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#10b981", display: "inline-block" }} />
-                      Optimal threshold
+                      {isDemoMode ? "Optimal threshold" : "No live CPU metric available"}
                     </div>
                   </article>
 
@@ -201,10 +170,10 @@ export default function HomePage() {
                       Cluster Memory
                     </div>
                     <div style={{ fontSize: "32px", fontWeight: "800", color: "#ffffff", letterSpacing: "-0.03em", marginBottom: "8px" }}>
-                      74%
+                      {isDemoMode ? "74%" : "—"}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#fbbf24", fontWeight: "600" }}>
-                      ▲ +4.2% peak surge
+                      {isDemoMode ? "▲ +4.2% peak surge" : "No live memory metric available"}
                     </div>
                   </article>
 
@@ -221,10 +190,10 @@ export default function HomePage() {
                       Error Rate
                     </div>
                     <div style={{ fontSize: "32px", fontWeight: "800", color: "#ffffff", letterSpacing: "-0.03em", marginBottom: "8px" }}>
-                      0.8%
+                      {isDemoMode ? "0.8%" : "—"}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#34d399", fontWeight: "600" }}>
-                      ▼ -0.3% vs target
+                      {isDemoMode ? "▼ -0.3% vs target" : "No live error-rate metric available"}
                     </div>
                   </article>
 
@@ -241,10 +210,10 @@ export default function HomePage() {
                       P95 Latency
                     </div>
                     <div style={{ fontSize: "32px", fontWeight: "800", color: "#ffffff", letterSpacing: "-0.03em", marginBottom: "8px" }}>
-                      214 ms
+                      {isDemoMode ? "214 ms" : "—"}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#fbbf24", fontWeight: "600" }}>
-                      ⚡ Fast API SLA
+                      {isDemoMode ? "⚡ Fast API SLA" : "No live latency metric available"}
                     </div>
                   </article>
 
@@ -261,10 +230,12 @@ export default function HomePage() {
                       Monthly Cloud Cost
                     </div>
                     <div style={{ fontSize: "32px", fontWeight: "800", color: "#ffffff", letterSpacing: "-0.03em", marginBottom: "8px" }}>
-                      {overview.finops.total_cost_usd > 0 ? `$${overview.finops.total_cost_usd.toLocaleString()}` : "$18,420"}
+                      {overview.finops.total_cost_usd > 0
+                        ? `$${overview.finops.total_cost_usd.toLocaleString()}`
+                        : isDemoMode ? "$18,420" : "—"}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#fbbf24", fontWeight: "600" }}>
-                      💰 6.4% under budget
+                      {isDemoMode ? "💰 6.4% under budget" : "Reported cloud spend"}
                     </div>
                   </article>
 
@@ -281,19 +252,18 @@ export default function HomePage() {
                       LLM Token Volume
                     </div>
                     <div style={{ fontSize: "32px", fontWeight: "800", color: "#ffffff", letterSpacing: "-0.03em", marginBottom: "8px" }}>
-                      12.8M
+                      {isDemoMode ? "12.8M" : totalLlmTokens > 0 ? new Intl.NumberFormat("en", { notation: "compact" }).format(totalLlmTokens) : "—"}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#c084fc", fontWeight: "600" }}>
-                      🟣 Gateway Active
+                      {isDemoMode ? "🟣 Gateway Active" : totalLlmTokens > 0 ? "Gateway telemetry" : "No token telemetry available"}
                     </div>
                   </article>
                 </section>
 
                 {/* Bottom 2 Cards matching Image 1: Active Incidents and Healthy Agents */}
                 <section
+                  className="dashboard-grid"
                   style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
                     gap: "20px",
                   }}
                 >
