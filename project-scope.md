@@ -1,157 +1,143 @@
-1.User experience and API layer
+# AI AgentOps Platform — Project Scope & Architecture
+
+> A structured reference for the platform architecture, security boundaries, specialist-agent workflows, production readiness, and implementation plan.
+
+## Contents
+
+- [Architecture overview](#architecture-overview)
+- [Production-readiness priorities](#the-most-important-bottlenecks-to-fix-first)
+- [Target architecture](#target-architecture-what-i-would-change)
+- [Architecture diagram](#ai-agentops-platform-architecture)
+- [Component review](#component-by-component-review)
+- [Tenant-aware design and integrations](#organization-project-environment-and-tenant-aware-design)
+- [Specialist-agent workflows](#end-to-end-workflow-for-each-specialist-agent)
+- [End-to-end incident example](#how-all-agents-work-together-a-complete-incident-example)
+- [Reliability, observability, and failure handling](#durable-execution-queues-and-concurrency)
+- [Guardrails and evaluation](#agent-guardrails-and-evaluation)
+- [Production bottlenecks](#production-bottlenecks-you-may-not-notice-in-the-diagram)
+- [Implementation checklist](#implementation-checklist)
+- [Recommended technology stack](#recommended-technology-stack)
+- [Infrastructure ownership](#infrastructure-ownership)
+- [Pending edge cases](#pending-edge-cases-and-how-to-resolve-them)
+
+---
+
+## Architecture overview
+
+### User experience and API layer
 
 Next.js Web UI, FastAPI API layer, OAuth2/OIDC/RBAC, and the LangGraph Supervisor/Router.
 
 Purpose: authenticate users, receive requests, and route tasks to specialist agents.
 
-
-2. Specialist agent layer
+### 2. Specialist agent layer
 
 Discovery & Inventory, SRE/Incident Intelligence, FinOps & Capacity Optimization, Remediation, LLMOps, Security Investigation, and Change Intelligence.
 
 Purpose: solve domain-specific problems with constrained tools and explicit workflows.
 
-
-3. Shared platform services
+### 3. Shared platform services
 
 Policy/Risk Engine, Human Approval Engine, OpenTelemetry, RAG Service, LLM Gateway, MCP Gateway, pgvector, PostgreSQL, Redis, and Audit Service.
 
 Purpose: centralize shared infrastructure, governance, model access, knowledge retrieval, and evidence collection.
 
-
-4. External execution and infrastructure
+### 4. External execution and infrastructure
 
 LLM providers, AWS, Azure, GCP, Kubernetes, CI/CD, ITSM/ticketing, and observability platforms.
 
 Purpose: supply operational data and provide the tools through which agents perform authorized actions.
 
-
-The most important bottlenecks to fix first
-Priority order for enterprise production readiness
-01 Tenant isolation and authorization
+## The most important bottlenecks to fix first
+**Priority order for enterprise production readiness**
+### 01. Tenant isolation and authorization
 
 Every request, database query, retrieved document, tool call, background job, and audit event must preserve organization, project, and environment boundaries.
 
-
-02 Durable workflow execution
+### 02. Durable workflow execution
 
 LangGraph orchestration alone does not replace durable job execution, idempotency, distributed locks, recovery, timeouts, and handling of partially completed remediation.
 
-
-03 Tool security and remediation safety
+### 03. Tool security and remediation safety
 
 An agent must not execute arbitrary shell commands, modify cloud resources, or bypass policy simply because a model recommended an action.
 
-04 Integration and credential isolation
+### 04. Integration and credential isolation
 
 Cloud, Kubernetes, CI/CD, ITSM, and observability connections need scoped credentials, secret rotation, health checks, versioning, and revocation.
 
-05 LLM and dependency resilience
+### 05. LLM and dependency resilience
 
 Provider outages, throttling, invalid model output, MCP failures, slow queries, and overloaded databases must not collapse the entire workflow.
 
-06 Observability and evaluation
+### 06. Observability and evaluation
 
 Trace the complete journey from user request to model call, retrieval, tool execution, approval, and final outcome; evaluate correctness and operational safety.
 
-07 Tenant-aware data lifecycle
+### 07. Tenant-aware data lifecycle
 
 Define ownership, retention, deletion, encryption, backup, restoration, data residency, and isolation for conversations, traces, documents, and credentials.
 
-
-Target architecture: what I would change
+## Target architecture: what I would change
 Your diagram is currently service-centric: it shows which components communicate. An enterprise architecture also needs to show who is allowed to do what, where work executes, how state survives failures, and how actions are verified.
 
 I would organize it into these logical planes.
-1. Experience plane
+### 1. Experience plane
 
 Next.js · Chat · Dashboards · Approval inbox · API clients
 
-
-2. Identity and API security
+### 2. Identity and API security
 
 Kong Gateway · Keycloak · FastAPI · Tenant context · RBAC/ABAC
 
-
-3. Control plane
+### 3. Control plane
 Organization & project registry
-
 
 Integration registry
 
-
 Policy and risk engine
-
 
 Approval and audit
 
-
-
-
-
-4. Durable execution plane
+### 4. Durable execution plane
 Workflow engine + LangGraph
 
 Persistent state · Job queue · Retries · Timeouts · Checkpoints · Cancellation
 
 Discovery / Inventory
 
-
 SRE / Incident
-
 
 FinOps / Capacity
 
-
 Security Investigation
-
 
 LLMOps
 
-
 Change Intelligence
-
 
 Remediation
 
-
-
-
-
-5. Shared runtime services
+### 5. Shared runtime services
 LLM Gateway
-
 
 MCP Gateway / Tool Registry
 
-
 RAG and Retrieval
-
 
 Guardrails / Evaluation
 
-
 Secrets and Credentials
-
 
 Event Bus / Scheduler
 
-
-
-
-
-6. Data and integration plane
+### 6. Data and integration plane
 
 PostgreSQL · pgvector · Redis · Object storage · AWS/Azure/GCP · Kubernetes · CI/CD · ITSM · Observability
 
-
-7. Cross-cutting platform foundation
+### 7. Cross-cutting platform foundation
 
 OpenTelemetry · Security monitoring · SLOs · Backup/DR · FinOps · CI/CD · Policy-as-code
-
-
-
-
 
 ## AI AgentOps Platform Architecture
 
@@ -264,27 +250,24 @@ flowchart TB
     style FOUNDATION fill:#1b1b1b,stroke:#bdbdbd,stroke-width:2px,color:#ffffff
 ```
 
+## Missing components I would add to your diagram
+| Missing component | Why it matters |
+| --- | --- |
+| Organization, project and environment registry | Establishes authoritative ownership and scope |
+| Durable job/workflow execution | Recovers long-running jobs after crashes or restarts |
+| Event bus or task queue | Decouples API requests from slow agent workflows |
+| Integration registry | Stores connection metadata, scopes, health, and ownership |
+| Secrets manager | Protects cloud credentials, tokens, and integration secrets |
+| Tool execution sandbox | Restricts risky scripts, queries, and generated code |
+| Guardrails and evaluation service | Validates inputs, outputs, actions, and workflow quality |
+| Central configuration and feature flags | Enables safe rollout, versioning, and emergency disablement |
+| Database migration and backup/restore pipeline | Supports recoverability and controlled schema evolution |
+| Usage metering and quota service | Enforces tenant-specific model, API, and infrastructure budgets |
+| Notification service | Delivers approval requests, incident updates, and failure alerts |
+| Data lifecycle service | Handles retention, deletion, archival, and audit requirements |
 
-
-
-Missing components I would add to your diagram
-Missing component	Why it matters
-Organization, project and environment registry	Establishes authoritative ownership and scope
-Durable job/workflow execution	Recovers long-running jobs after crashes or restarts
-Event bus or task queue	Decouples API requests from slow agent workflows
-Integration registry	Stores connection metadata, scopes, health, and ownership
-Secrets manager	Protects cloud credentials, tokens, and integration secrets
-Tool execution sandbox	Restricts risky scripts, queries, and generated code
-Guardrails and evaluation service	Validates inputs, outputs, actions, and workflow quality
-Central configuration and feature flags	Enables safe rollout, versioning, and emergency disablement
-Database migration and backup/restore pipeline	Supports recoverability and controlled schema evolution
-Usage metering and quota service	Enforces tenant-specific model, API, and infrastructure budgets
-Notification service	Delivers approval requests, incident updates, and failure alerts
-Data lifecycle service	Handles retention, deletion, archival, and audit requirements
-
-
-4. Component-by-component review
-4.1 Next.js Web UI
+## 4. Component-by-component review
+### 4.1 Next.js Web UI
 Role: the user-facing workspace for platform engineers, SREs, FinOps teams, and administrators.
 What it should do
 - Show organizations, projects, environments, cloud accounts, and integrations.
@@ -300,8 +283,7 @@ Use SSE for one-way progress streaming where possible, and WebSockets only where
 
 Acceptance test: a user who changes a project ID in a URL or API payload must not gain access to another project's incident, trace, integration, or approval.
 
-
-4.2 FastAPI API layer
+### 4.2 FastAPI API layer
 Role: the application boundary between the UI and the platform.
 
 Keep it responsible for:
@@ -322,11 +304,9 @@ GET    /v1/runs/{run_id}/events
 GET    /v1/runs/{run_id}/approvals
 POST   /v1/approvals/{approval_id}/decision
 
-
 Every endpoint must verify the caller's access to the underlying resource, not just the validity of the URL or token.
 
-
-4.3 OAuth2 / OIDC / RBAC
+### 4.3 OAuth2 / OIDC / RBAC
 Your diagram puts authentication before the LangGraph supervisor. That is correct, but authentication alone is insufficient.
 All four identity providers — Keycloak, AWS, Azure, and GCP — can be selected independently as applicable identity integrations; Keycloak is not assumed to broker the other providers.
 
@@ -340,9 +320,7 @@ Use OIDC for user login, OAuth2 access tokens for APIs, RBAC for coarse-grained 
 
 Never trust a client-supplied org_id or project_id without checking membership and permissions against authoritative server-side data.
 
-
-
-4.4 LangGraph Supervisor / Router
+### 4.4 LangGraph Supervisor / Router
 Role: coordinate the workflow, choose specialist capabilities, track state, and assemble results.
 
 The supervisor should not have unrestricted access to every tool. It should select from a controlled registry of capabilities, while deterministic backend code enforces authorization and execution rules.
@@ -360,18 +338,11 @@ A good flow is:
 10. Verify results and produce an evidence-backed report.
 Add maximum graph steps, per-node deadlines, total workflow deadlines, model-token budgets, tool-call limits, and cancellation handling.
 
-Use persistent LangGraph checkpoints for resumable state and human interrupts. Its documented persistence mechanisms support state recovery and human-in-the-loop workflows, but they do not remove the need for idempotent external side effects. 
-
-Docs by LangChain
-+1
-
-
-
+Use persistent LangGraph checkpoints for resumable state and human interrupts. Its documented persistence mechanisms support state recovery and human-in-the-loop workflows, but they do not remove the need for idempotent external side effects.
 
 Important distinction: a checkpoint can remember that a remediation step was about to execute; it cannot guarantee that a cloud API call wasn't already completed before a worker crashed. That requires execution receipts, idempotency, and reconciliation.
 
-
-4.5 Specialist agent layer
+### 4.5 Specialist agent layer
 Avoid implementing every agent as an autonomous loop that independently plans and executes anything it wants.
 
 Treat each specialist as a bounded capability with:
@@ -383,7 +354,7 @@ Treat each specialist as a bounded capability with:
 - A deterministic validation stage.
 - A fallback and escalation path.
 
-4.6 Policy / Risk Engine
+### 4.6 Policy / Risk Engine
 This is one of the most important services in the design.
 
 It must be an independent enforcement service, not simply a prompt that asks the LLM whether an action is safe.
@@ -411,13 +382,11 @@ Its output should be a structured decision:
   ]
 }
 
-
 This is an illustrative contract, not a prescribed schema.
 
 The policy engine must fail closed for privileged write operations if authorization or policy evaluation is unavailable. For read-only diagnostics, you may allow a deliberately limited fallback.
 
 Use deterministic policies such as OPA/Rego or Cedar, or a well-tested custom rules engine. Keep policy decisions separate from model-generated reasoning.
-
 
 Human Approval Engine
 An approval is not just a button in the UI. It is a durable, auditable authorization event.
@@ -437,7 +406,6 @@ Approvals must expire, be revocable where appropriate, and be protected against 
 
 LangGraph interrupts are useful for pausing and resuming the workflow, but your approval service must own the business record, identity checks, expiration, and audit history
 
-
 Audit Service
 Keep business audit records separate from ordinary debug logs.
 
@@ -452,7 +420,6 @@ Record:
 Use append-only or tamper-evident storage for important audit events, with restricted administrative access and a defined retention policy.
 
 Do not indiscriminately log raw prompts, cloud credentials, tokens, sensitive log content, or entire retrieved documents.
-
 
 PostgreSQL
 PostgreSQL should be the authoritative transactional store for your application.
@@ -497,7 +464,6 @@ allowed_groups / ACL reference
 ingestion_timestamp
 retention_policy
 
-
 The actual ACL design should support more than one user or group per document; the fields above are conceptual.
 
 Apply access filtering before or within retrieval, then recheck permissions before returning source content. Do not retrieve globally and rely on the LLM to ignore unauthorized documents.
@@ -508,7 +474,7 @@ Best for runbooks, architecture documents, incident postmortems, cloud standards
 
 Flow: query rewrite → authorization filters → hybrid retrieval → reranking → context assembly → grounded answer with citations.
 
-Recommended RAG implementation
+### Recommended RAG implementation
 1. Ingestion: collect approved documents from Git, object storage, internal knowledge bases, tickets, and postmortems.
 2. Parsing: extract text, tables, code blocks, metadata, and relevant document structure.
 3. Normalization: remove duplicates and boilerplate while preserving code, commands, and technical identifiers.
@@ -521,7 +487,7 @@ Recommended RAG implementation
 10. Validation: check citation coverage, answer relevance, freshness, and access control.
 11. Feedback: record retrieval failures, missing documents, and user corrections for evaluation.
 
-What documents should you ingest?
+### What documents should you ingest?
 Prioritize authoritative, versioned operational knowledge:
 - Cloud and Kubernetes architecture diagrams and configuration references.
 - Approved runbooks and standard operating procedures.
@@ -550,9 +516,8 @@ itsm.add_worknote
 cicd.get_deployment_status
 observability.query_metrics
 
-
 These are illustrative tool names.
-What your MCP Gateway needs
+### What your MCP Gateway needs
 - A registry of approved tool servers and tool schemas.
 - Per-tool authentication and authorization.
 - Project and environment scope enforcement.
@@ -564,14 +529,11 @@ What your MCP Gateway needs
 - Audit records and execution receipts.
 - Isolation of untrusted tool-server output.
 - Separate permissions for read and write operations.
-MCP security guidance and authorization patterns are evolving, so pin compatible protocol versions, verify tokens and scopes, and test the exact clients and servers you deploy. 
+MCP security guidance and authorization patterns are evolving, so pin compatible protocol versions, verify tokens and scopes, and test the exact clients and servers you deploy.
 
 MCP Apps
-+1
 
-
-
-Should you build an MCP server for every integration?
+### Should you build an MCP server for every integration?
 Not necessarily. You can have a small number of domain-specific servers, for example cloud inventory, Kubernetes operations, ITSM, and observability.
 
 Avoid a single enormous MCP server that exposes every privileged action to every agent. Tool discovery does not imply tool authorization.
@@ -579,7 +541,7 @@ Avoid a single enormous MCP server that exposes every privileged action to every
 LLM Gateway
 The LLM Gateway should abstract model providers and enforce model-use policies.
 
-Responsibilities:
+### Responsibilities:
 - Provider and model routing.
 - Credential isolation.
 - Request and response normalization.
@@ -592,24 +554,19 @@ Responsibilities:
 - Request/response safety checks.
 - Per-tenant budgets and model-use permissions.
 Use separate model profiles for different tasks:
-Task	Model strategy
-Request classification	Small, low-latency model or deterministic classifier
-Extraction and structured output	Model with reliable schema adherence
-Incident reasoning	Strong reasoning model with bounded context
-Embeddings	Dedicated embedding model
-Reranking	Dedicated reranker where justified
-Sensitive operations	Policy engine plus validated action schema; never rely on a model's confidence alone
+| Task | Model strategy |
+| --- | --- |
+| Request classification | Small, low-latency model or deterministic classifier |
+| Extraction and structured output | Model with reliable schema adherence |
+| Incident reasoning | Strong reasoning model with bounded context |
+| Embeddings | Dedicated embedding model |
+| Reranking | Dedicated reranker where justified |
+| Sensitive operations | Policy engine plus validated action schema; never rely on a model's confidence alone |
 
 Keep the LLM gateway responsible for model traffic. The MCP gateway should control tool traffic. Both should share trace IDs, tenant context, security policy references, and audit correlation.
 
-Kong Gateway vs Kong AI Gateway
-Kong can be a useful front door for your APIs and AI traffic. Its AI Gateway capabilities include model-provider proxying, AI-aware rate limits, prompt-related controls, routing, and related governance features, depending on product edition and configuration. 
-
-Kong Docs
-+2
-
-
-
+### Kong Gateway vs Kong AI Gateway
+Kong can be a useful front door for your APIs and AI traffic. Its AI Gateway capabilities include model-provider proxying, AI-aware rate limits, prompt-related controls, routing, and related governance features, depending on product edition and configuration.
 
 A practical division is:
 - Kong Gateway: inbound routing, TLS, API authentication integration, traffic controls, request limits, and API exposure.
@@ -622,14 +579,7 @@ Avoid running overlapping authentication, retry, caching, and policy logic in mu
 
 Also, a gateway-level prompt guard is not a complete agent safety system. It cannot independently verify that a cloud resource change is authorized, reversible, and safe.
 
-OpenTelemetry
-OpenTelemetry is the instrumentation and telemetry standard, not the dashboard or storage backend. Its context propagation connects traces, logs, and metrics across service boundaries. 
-
-OpenTelemetry
-+1
-
-
-
+OpenTelemetry is the instrumentation and telemetry standard, not the dashboard or storage backend. Its context propagation connects traces, logs, and metrics across service boundaries.
 
 Instrument the full path:
 Browser
@@ -648,7 +598,6 @@ LangGraph workflow
   → Tool server
   → Cloud / Kubernetes / ITSM
 
-
 Each workflow should have a trace ID, and each significant operation should have a span. Propagate trace context across HTTP calls and queue messages.
 
 Record useful attributes such as:
@@ -664,12 +613,11 @@ Do not use high-cardinality identifiers such as raw user IDs or workflow IDs as 
 
 Avoid exporting raw prompts, authorization tokens, secrets, or sensitive tool arguments by default.
 
-
-Organization, project, environment and tenant-aware design
+## Organization, project, environment and tenant-aware design
 This is one of the most important data-model decisions in your platform.
 
 A multi-tenant architecture should not assume that a user, an organization, a project, and a cloud account are interchangeable concepts.
-7.1 Recommended hierarchy
+### 7.1 Recommended hierarchy
 Platform
 
 Platform operators · Global configuration · Platform security
@@ -684,43 +632,39 @@ Team ownership · Applications · Services · Knowledge sources · Integration b
 
 Development
 
-
 Staging
 
-
 Production
-
-
 
 Resources and integrations
 
 Cloud accounts · Clusters · Services · Repositories · Dashboards · Tickets
 
-
 The environment names are examples. Organizations may have other environments or multiple production environments.
-7.2 Database entities to create
-Entity	Important fields / purpose
-organizations	id, name, status, plan, security configuration
-users	External identity subject, profile and lifecycle
-organization_memberships	Organization, user, status, organization role
-projects	Organization, project name, owner, settings
-project_memberships	User/group, project, role, scope
-environments	Project, name, criticality, change policy
-integration_connections	Provider, connection metadata, status, owner
-integration_bindings	Connection, project/environment scope, allowed capabilities
-secret_references	Secret-manager reference, version, rotation metadata
-agent_definitions	Agent type, version, allowed tools, configuration
-workflow_runs	Scope, initiator, status, graph version, trace reference
-workflow_steps	Step state, attempts, results, error classification
-approvals	Action reference, approver, expiry, decision
-policy_versions	Version, scope, ruleset reference, activation status
-knowledge_sources	Source owner, access policy, ingestion status
-documents / document_chunks	Source version, classification, ACL reference, embeddings
-audit_events	Actor, scope, action, outcome, integrity metadata
-usage_records	Tenant, project, model, tokens, cost, usage category
+### 7.2 Database entities to create
+| Entity | Important fields / purpose |
+| --- | --- |
+| organizations | id, name, status, plan, security configuration |
+| users | External identity subject, profile and lifecycle |
+| organization_memberships | Organization, user, status, organization role |
+| projects | Organization, project name, owner, settings |
+| project_memberships | User/group, project, role, scope |
+| environments | Project, name, criticality, change policy |
+| integration_connections | Provider, connection metadata, status, owner |
+| integration_bindings | Connection, project/environment scope, allowed capabilities |
+| secret_references | Secret-manager reference, version, rotation metadata |
+| agent_definitions | Agent type, version, allowed tools, configuration |
+| workflow_runs | Scope, initiator, status, graph version, trace reference |
+| workflow_steps | Step state, attempts, results, error classification |
+| approvals | Action reference, approver, expiry, decision |
+| policy_versions | Version, scope, ruleset reference, activation status |
+| knowledge_sources | Source owner, access policy, ingestion status |
+| documents / document_chunks | Source version, classification, ACL reference, embeddings |
+| audit_events | Actor, scope, action, outcome, integrity metadata |
+| usage_records | Tenant, project, model, tokens, cost, usage category |
 
 Use UUIDs or similarly opaque identifiers, but do not confuse opaque IDs with authorization. Knowing a UUID must never grant access.
-Required database constraints
+## Required database constraints
 - All project-owned resources must reference their owning organization.
 - Enforce uniqueness within the appropriate scope, not globally by display name.
 - Validate that an environment belongs to the requested project and organization.
@@ -729,17 +673,17 @@ Required database constraints
 - Consider PostgreSQL row-level security as defense in depth.
 - Test background jobs and database connection pooling carefully if using row-level security with session state.
 
-
-How should integrations be configured at each level?
+## How should integrations be configured at each level?
 Use inheritance with explicit overrides, not unrestricted copying of organization-level settings into every project.
-Level	Configuration examples
-Organization	Allowed providers, SSO, approved model catalog, default retention, maximum spend, global security rules
-Project	Application inventory, project-specific runbooks, default observability source, team ownership, project budgets
-Environment	Cluster/account binding, production restrictions, change windows, required approval rules, resource allowlists
-Integration	Connection metadata, provider, credential reference, permitted API scopes, health and sync state
-Agent/workflow	Allowed capabilities, model profile, maximum budget, timeout, retry limits, policy profile
+| Level | Configuration examples |
+| --- | --- |
+| Organization | Allowed providers, SSO, approved model catalog, default retention, maximum spend, global security rules |
+| Project | Application inventory, project-specific runbooks, default observability source, team ownership, project budgets |
+| Environment | Cluster/account binding, production restrictions, change windows, required approval rules, resource allowlists |
+| Integration | Connection metadata, provider, credential reference, permitted API scopes, health and sync state |
+| Agent/workflow | Allowed capabilities, model profile, maximum budget, timeout, retry limits, policy profile |
 
-Example
+## Example
 An organization configures an AWS integration and allows read-only discovery. A project binds to that integration. A production environment can inherit the connection but must still apply stricter access rules.
 
 A development environment may permit additional diagnostic operations. Production remediation may require approval even when the same tool is available.
@@ -753,7 +697,7 @@ The effective permission should be calculated from:
 - The specific resource and operation.
 The effective permission must be the intersection of allowed permissions, not the union of everything configured at different levels. Higher-level policies may impose mandatory restrictions that lower-level configurations cannot weaken.
 
-How to manage integrations properly
+## How to manage integrations properly
 Treat each integration as a managed resource with a lifecycle:
 1. Create a connection through an authorized onboarding workflow.
 2. Validate credentials and requested scopes.
@@ -769,8 +713,7 @@ Add an integration status model such as pending, active, degraded, reauthorizati
 
 Do not assume that an integration working at organization level means every project should automatically gain access to it.
 
-
-End-to-end workflow for each specialist agent
+## End-to-end workflow for each specialist agent
 Every agent should follow a common lifecycle:
 1
 
@@ -778,15 +721,11 @@ Request
 
 Receive a typed task and an authenticated execution context.
 
-
-
 2
 
 Scope
 
 Resolve tenant, project, environment, permitted resources, and deadline.
-
-
 
 3
 
@@ -794,15 +733,11 @@ Gather evidence
 
 Read authoritative APIs, telemetry, approved knowledge sources, and relevant history.
 
-
-
 4
 
 Analyze
 
 Use bounded model reasoning and deterministic rules to generate findings.
-
-
 
 5
 
@@ -810,15 +745,11 @@ Validate
 
 Check evidence, schema, confidence calibration, authorization, and risk.
 
-
-
 6
 
 Decide
 
 Return findings, ask for clarification, escalate, or propose an action.
-
-
 
 7
 
@@ -826,15 +757,11 @@ Approve and execute
 
 Obtain required approval and execute only the authorized action.
 
-
-
 8
 
 Verify
 
 Check the actual outcome against the expected result.
-
-
 
 9
 
@@ -842,11 +769,9 @@ Record and learn
 
 Persist evidence, outcome, cost, trace, and evaluation feedback.
 
-
-
 The common lifecycle should be implemented as reusable workflow infrastructure, while each specialist supplies its own domain logic and allowed capabilities.
 
-1 Discovery & Inventory Agent
+## 1 Discovery & Inventory Agent
 Use case: identify resources, dependencies, ownership, and configuration drift across AWS, Azure, GCP, openshift, git repo, and Kubernetes.
 
 End-to-end workflow:
@@ -867,7 +792,7 @@ Fallback: retain the last successful snapshot, mark it stale, and clearly distin
 
 Evaluation: inventory completeness, duplicate rate, ownership accuracy, stale-data rate, and reconciliation accuracy.
 
-2 SRE / Incident Intelligence Agent
+## 2 SRE / Incident Intelligence Agent
 Use case: investigate alerts, service degradation, latency spikes, failed deployments, and production incidents.
 
 Workflow:
@@ -887,7 +812,7 @@ Do not let the agent equate correlation with causation. A deployment immediately
 Fallback: use deterministic alert rules, recent-change correlation, known runbooks, and a concise summary when the model is unavailable.
 
 Evaluation: time to useful diagnosis, evidence coverage, root-cause precision, unsupported-claim rate, and recommendation acceptance.
-3 FinOps & Capacity Optimization Agent
+## 3 FinOps & Capacity Optimization Agent
 Use case: identify waste, predict capacity pressure, estimate cost, and recommend safe optimization.
 
 Workflow:
@@ -907,7 +832,7 @@ Fallback: provide a conservative report using cached billing data and last-known
 
 Evaluation: forecast error, realized savings, false-positive waste detection, SLO regressions, and avoided unnecessary spend.
 
-4 Remediation Agent
+## 4 Remediation Agent
 Use case: execute controlled recovery actions, such as rolling back a deployment or restarting a failing workload.
 
 This is the highest-risk agent in your platform.
@@ -935,7 +860,7 @@ Fallback: if policy, authorization, or approval services are unavailable, do not
 
 Evaluation: unauthorized action count, policy bypass rate, execution success, rollback success, recovery time, and unintended side effects. The target for unauthorized execution is zero.
 
-5 LLMOps Agent
+## 5 LLMOps Agent
 Use case: monitor model endpoints, detect quality or latency regressions, analyze token costs, and investigate production model failures.
 
 Workflow:
@@ -953,7 +878,7 @@ Fallback: use static model routing, a known-good model configuration, and cached
 
 Evaluation: task-specific quality, cost per successful task, p95 latency, error rates, regression detection accuracy, and rollback effectiveness.
 
-6 Security Investigation Agent
+## 6 Security Investigation Agent
 Use case: investigate IAM anomalies, suspicious changes, risky configurations, vulnerability findings, and security alerts.
 
 Workflow:
@@ -974,8 +899,7 @@ Fallback: escalate to human security responders when evidence is incomplete or t
 
 Evaluation: detection precision and recall on labelled cases, severity calibration, investigation completeness, and time to escalation.
 
-
-7 Change Intelligence Agent
+## 7 Change Intelligence Agent
 Use case: assess deployment risk, change conflicts, dependencies, and likely impact before a release.
 
 Workflow:
@@ -994,7 +918,7 @@ Fallback: use deterministic deployment gates and policy checks; if required evid
 
 Evaluation: change-failure rate, risk-ranking accuracy, incident prediction precision, and false-positive blocking rate.
 
-How all agents work together: a complete incident example
+## How all agents work together: a complete incident example
 Suppose an engineer asks:
 Investigate why our production Kubernetes application has high latency, identify the likely root cause, estimate the financial impact, and propose a safe fix.
 
@@ -1005,15 +929,11 @@ Authenticate and scope
 
 Keycloak authenticates the engineer. FastAPI resolves the organization, project, production environment, and permitted integrations.
 
-
-
 02
 
 Create a durable run
 
 Persist the workflow and enqueue it. Return a run ID; propagate trace and tenant context to the worker.
-
-
 
 03
 
@@ -1021,15 +941,11 @@ Collect evidence
 
 Discovery identifies affected resources. SRE gathers metrics, logs, traces, events, and recent deployment history.
 
-
-
 04
 
 Investigate with RAG
 
 Retrieve relevant runbooks, service ownership information, and similar postmortems. Enforce document ACLs and cite evidence.
-
-
 
 05
 
@@ -1037,15 +953,11 @@ Form and test hypotheses
 
 The SRE agent correlates evidence, checks alternative explanations, and identifies what remains unknown.
 
-
-
 06
 
 Estimate impact
 
 FinOps estimates capacity and cost implications. Change Intelligence checks recent changes and deployment risk.
-
-
 
 07
 
@@ -1053,15 +965,11 @@ Create a remediation proposal
 
 Remediation produces a typed action, preconditions, blast-radius estimate, verification checks, and rollback plan.
 
-
-
 08
 
 Enforce policy
 
 The policy engine checks environment criticality, resource permissions, action risk, and approval requirements.
-
-
 
 09
 
@@ -1069,15 +977,11 @@ Human approval
 
 If required, persist the pending approval and pause execution. Notify the authorized approver.
 
-
-
 10
 
 Execute safely
 
 Revalidate the approval and target state. Call the MCP tool through the constrained execution service using scoped credentials.
-
-
 
 11
 
@@ -1085,17 +989,13 @@ Verify recovery
 
 Query Kubernetes and observability systems again. Compare latency, errors, health checks, and SLOs against the expected outcome.
 
-
-
 12
 
 Close the loop
 
 Update the incident ticket, persist execution evidence, report actual results, and capture evaluation feedback.
 
-
-
-Important workflow rules
+## Important workflow rules
 - Read-only evidence gathering can run in parallel when the dependencies allow it.
 - Resource-changing operations must pass through a centralized authorization and execution boundary.
 - A missing integration must produce an explicit evidence gap, not an invented conclusion.
@@ -1104,11 +1004,11 @@ Important workflow rules
 - A successful API response is not sufficient evidence that the service recovered.
 - Every recommendation should distinguish observed facts from hypotheses and proposed actions.
 
-Durable execution, queues and concurrency
+## Durable execution, queues and concurrency
 Your diagram shows LangGraph, but not how the platform will handle large numbers of simultaneous workflows.
 
 This is a potential enterprise bottleneck.
-Recommended execution model
+## Recommended execution model
 Separate the synchronous API from long-running workflow execution.
 FastAPI
 
@@ -1122,16 +1022,13 @@ Worker pool A
 
 Read-only investigation
 
-
 Worker pool B
 
 Privileged execution
 
-
-
 Persistent state and execution receipts in PostgreSQL; queue implementation selected to match workload requirements.
 
-What to implement
+## What to implement
 1. Durable workflow state and checkpoint persistence.
 2. Separate worker pools for different risk levels and workload profiles.
 3. Per-tenant concurrency and queue quotas.
@@ -1142,35 +1039,28 @@ What to implement
 8. Dead-letter queues and a controlled replay process.
 9. Cancellation and cooperative shutdown.
 10. Reconciliation for actions whose outcome is unknown.
-LangGraph is appropriate for stateful agent orchestration. Use its persistence capabilities, but don't assume it replaces every queue, scheduler, or job-execution concern. 
-
-Docs by LangChain
-+1
-
-
-
+LangGraph is appropriate for stateful agent orchestration. Use its persistence capabilities, but don't assume it replaces every queue, scheduler, or job-execution concern.
 
 Queue choice: start with a reliable PostgreSQL-backed queue if workload and throughput justify that simplicity. Consider a dedicated broker or durable workflow platform when concurrency, event volume, scheduling, or long-running execution demands it. Do not introduce Kafka, Temporal, and several other orchestration systems simultaneously without a specific need.
 
+## Metrics to monitor
+| Layer | Metrics |
+| --- | --- |
+| API | Request rate, p50/p95/p99 latency, errors, rate-limit rejections |
+| Workflow | Queue age, duration, success/failure, cancellation, retry count |
+| Agents | Step count, tool calls, completion rate, budget exhaustion |
+| LLM | Time to first token, response latency, errors, tokens, cost, fallback rate |
+| RAG | Retrieval latency, zero-result rate, reranker latency, citation coverage |
+| MCP | Tool latency, failures, authorization denials, timeouts |
+| Policy | Allow/deny/approval decisions, evaluation latency, policy errors |
+| Approvals | Pending count, time to decision, expiry, rejection rate |
+| Database | Connections, query latency, lock contention, replication lag |
+| Redis | Memory, evictions, cache hit rate, connection failures |
+| Queue | Backlog, oldest message age, worker utilization, dead-letter count |
+| Integration | API quota errors, credential expiry, sync freshness |
+| Security | Failed login spikes, denied access, suspicious tool activity |
 
-Metrics to monitor
-Layer	Metrics
-API	Request rate, p50/p95/p99 latency, errors, rate-limit rejections
-Workflow	Queue age, duration, success/failure, cancellation, retry count
-Agents	Step count, tool calls, completion rate, budget exhaustion
-LLM	Time to first token, response latency, errors, tokens, cost, fallback rate
-RAG	Retrieval latency, zero-result rate, reranker latency, citation coverage
-MCP	Tool latency, failures, authorization denials, timeouts
-Policy	Allow/deny/approval decisions, evaluation latency, policy errors
-Approvals	Pending count, time to decision, expiry, rejection rate
-Database	Connections, query latency, lock contention, replication lag
-Redis	Memory, evictions, cache hit rate, connection failures
-Queue	Backlog, oldest message age, worker utilization, dead-letter count
-Integration	API quota errors, credential expiry, sync freshness
-Security	Failed login spikes, denied access, suspicious tool activity
-
-
-SLOs and alerting
+## SLOs and alerting
 Define service-level objectives based on actual customer expectations and workload measurements. For example:
 - Interactive API availability.
 - Time to first useful investigation result.
@@ -1181,7 +1071,7 @@ Define service-level objectives based on actual customer expectations and worklo
 - Maximum acceptable loss of telemetry during outages.
 Do not use a single overall "agent success rate." A workflow can return a polished answer while being factually wrong, incomplete, or unsafe.
 
-Trace and log privacy
+## Trace and log privacy
 AI telemetry can accidentally become a second database of customer secrets.
 - Redact secrets before export.
 - Avoid capturing raw prompts and responses by default.
@@ -1191,26 +1081,27 @@ AI telemetry can accidentally become a second database of customer secrets.
 - Define retention, deletion, and data residency requirements.
 - Ensure the telemetry collector cannot become a route for leaking data to unauthorized destinations
 
-Fallbacks and failure handling
+## Fallbacks and failure handling
 Your system needs a deliberate fallback strategy at every important boundary.
-Failure	Recommended behavior
-Primary LLM unavailable	Retry transient failures within a deadline, then use an approved compatible fallback model
-Fallback model unavailable	Return partial evidence, mark analysis unavailable, and stop model-dependent steps
-RAG service unavailable	Use approved direct sources where possible; otherwise state that knowledge retrieval is unavailable
-Vector index stale	Apply freshness rules and disclose the data age
-MCP server unavailable	Retry safe read calls; report unavailable evidence; do not invent tool results
-Cloud API rate limited	Honor provider retry guidance, use bounded backoff, and limit concurrency
-Redis unavailable	Bypass disposable caches when safe; protect the database and enforce security-sensitive limits elsewhere
-PostgreSQL unavailable	Reject operations that require durable writes; do not pretend that workflows or approvals were saved
-Queue unavailable	Reject or temporarily defer new work; avoid creating untracked executions
-Policy engine unavailable	Deny privileged writes; allow only explicitly designed safe fallback behavior for read-only operations
-Approval service unavailable	Pause high-risk actions
-Human approval expires	Do not execute; request a fresh approval if the workflow remains valid
-Worker crashes	Resume from durable state and reconcile external side effects
-Observability backend unavailable	Buffer telemetry within bounded limits; do not block critical operations indefinitely
-Integration credential revoked	Stop dependent work, mark the integration degraded, and request reauthorization
+| Failure | Recommended behavior |
+| --- | --- |
+| Primary LLM unavailable | Retry transient failures within a deadline, then use an approved compatible fallback model |
+| Fallback model unavailable | Return partial evidence, mark analysis unavailable, and stop model-dependent steps |
+| RAG service unavailable | Use approved direct sources where possible; otherwise state that knowledge retrieval is unavailable |
+| Vector index stale | Apply freshness rules and disclose the data age |
+| MCP server unavailable | Retry safe read calls; report unavailable evidence; do not invent tool results |
+| Cloud API rate limited | Honor provider retry guidance, use bounded backoff, and limit concurrency |
+| Redis unavailable | Bypass disposable caches when safe; protect the database and enforce security-sensitive limits elsewhere |
+| PostgreSQL unavailable | Reject operations that require durable writes; do not pretend that workflows or approvals were saved |
+| Queue unavailable | Reject or temporarily defer new work; avoid creating untracked executions |
+| Policy engine unavailable | Deny privileged writes; allow only explicitly designed safe fallback behavior for read-only operations |
+| Approval service unavailable | Pause high-risk actions |
+| Human approval expires | Do not execute; request a fresh approval if the workflow remains valid |
+| Worker crashes | Resume from durable state and reconcile external side effects |
+| Observability backend unavailable | Buffer telemetry within bounded limits; do not block critical operations indefinitely |
+| Integration credential revoked | Stop dependent work, mark the integration degraded, and request reauthorization |
 
-Retry rules that matter
+## Retry rules that matter
 Retries are not universally safe.
 - Retry read operations when transient failures justify it.
 - Retry model requests within explicit latency and cost budgets.
@@ -1220,13 +1111,12 @@ Retries are not universally safe.
 - Keep fallback models and tools within the same tenant, policy, and data-residency constraints.
 Use circuit breakers to stop repeatedly calling unhealthy dependencies, bulkheads to isolate failures, and bounded queues to prevent overload.
 
-
-Agent guardrails and evaluation
+## Agent guardrails and evaluation
 You need two different things:
 1. Guardrails prevent or constrain unsafe behavior at runtime.
 2. Evaluation measures whether the system performs well enough and detects regressions.
 Neither replaces the other.
-13.1 Defense-in-depth guardrails
+### 13.1 Defense-in-depth guardrails
 Input guardrails
 
 Validate request schemas, user permissions, resource scope, file size, and untrusted content.
@@ -1255,8 +1145,7 @@ Operational guardrails
 
 Enforce budgets, step limits, concurrency quotas, deadlines, cancellation, and circuit breakers.
 
-
-Common failure modes to explicitly test
+## Common failure modes to explicitly test
 - Prompt injection inside a runbook, ticket, log line, or tool result.
 - A model attempting to call a tool that was not authorized.
 - A user guessing another organization's project ID.
@@ -1267,20 +1156,21 @@ Common failure modes to explicitly test
 - A malicious or compromised tool server returning fabricated instructions.
 - A retrieved document containing sensitive information the user is not allowed to see.
 - An agent continuing to execute after its workflow has been cancelled.
-13.2 Evaluation framework
+### 13.2 Evaluation framework
 Create a versioned evaluation dataset from historical incidents, known failures, labelled documents, synthetic attacks, and approved remediation scenarios.
-Evaluation category	How to measure it
-Retrieval quality	Recall@k, precision@k, MRR or nDCG, permission-filter correctness
-Groundedness	Evidence support, citation correctness, unsupported-claim rate
-Incident diagnosis	Root-cause accuracy, evidence completeness, uncertainty calibration
-Tool use	Correct tool selection, argument validity, authorization correctness
-Workflow reliability	Completion rate, recovery after crashes, duplicate execution rate
-Remediation	Policy compliance, action success, verification success, rollback success
-Security	Cross-tenant leakage, injection resistance, unauthorized-action attempts blocked
-Efficiency	Cost per successful task, latency, retries, tokens per task
-Human interaction	Approval accuracy, escalation quality, time to decision
+| Evaluation category | How to measure it |
+| --- | --- |
+| Retrieval quality | Recall@k, precision@k, MRR or nDCG, permission-filter correctness |
+| Groundedness | Evidence support, citation correctness, unsupported-claim rate |
+| Incident diagnosis | Root-cause accuracy, evidence completeness, uncertainty calibration |
+| Tool use | Correct tool selection, argument validity, authorization correctness |
+| Workflow reliability | Completion rate, recovery after crashes, duplicate execution rate |
+| Remediation | Policy compliance, action success, verification success, rollback success |
+| Security | Cross-tenant leakage, injection resistance, unauthorized-action attempts blocked |
+| Efficiency | Cost per successful task, latency, retries, tokens per task |
+| Human interaction | Approval accuracy, escalation quality, time to decision |
 
-Run evaluations at multiple stages:
+## Run evaluations at multiple stages:
 1. Unit tests for individual tools, schemas, and policies.
 2. Retrieval tests against labelled documents.
 3. Agent tests using deterministic mocked integrations.
@@ -1290,7 +1180,7 @@ Run evaluations at multiple stages:
 7. Canary rollout with production telemetry and explicit rollback thresholds.
 8. Periodic replay of sanitized historical incidents.
 Use LLM-as-judge as one evaluation signal, not the only source of truth. Use deterministic checks wherever possible, and have domain experts label high-risk operational cases.
-13.3 Model and prompt versioning
+### 13.3 Model and prompt versioning
 Record the exact versions of:
 - Model/provider and model profile.
 - System prompt and specialist prompt.
@@ -1302,57 +1192,57 @@ Record the exact versions of:
 - Workflow configuration.
 Without versioning, you will struggle to explain why the same incident receives different recommendations after a deployment.
 
-
-14. Production bottlenecks you may not notice in the diagram
+### 14. Production bottlenecks you may not notice in the diagram
 Beyond the obvious infrastructure concerns, there are several architectural traps worth addressing before you scale.
-14.1 Too many agents
+### 14.1 Too many agents
 Adding more agents increases orchestration complexity, model calls, conflicting recommendations, and debugging difficulty.
 
 Start with the seven specialist capabilities you have designed, but implement simple tasks as deterministic workflows rather than autonomous agents. Introduce multi-agent collaboration only when it demonstrably improves quality.
-14.2 Too much synchronous communication
+### 14.2 Too much synchronous communication
 If every agent waits for another service, which waits for an LLM, which waits for a tool, your latency and failure probability compound.
 
 Use parallel execution for independent evidence collection, asynchronous execution for long-running jobs, and strict deadlines for dependencies.
-14.3 PostgreSQL becoming a shared bottleneck
+### 14.3 PostgreSQL becoming a shared bottleneck
 PostgreSQL may end up holding application data, graph checkpoints, vector embeddings, workflow events, and audit metadata. These workloads have different access patterns.
 
 Initially, they may share an instance, but use separate schemas, indexes, connection pools, retention policies, and workload monitoring. Separate databases or services when contention or isolation requirements justify it.
 
 Do not store unlimited conversation checkpoints, telemetry, or raw operational data indefinitely.
-14.4 Redis becoming an accidental source of truth
+### 14.4 Redis becoming an accidental source of truth
 Caching, distributed coordination, session state, and rate limiting have different correctness requirements. A Redis outage or eviction must not erase a pending approval or create an unauthorized execution path.
 
 Keep durable business state in PostgreSQL or another suitable durable store.
-14.5 RAG being treated as live operational truth
+### 14.5 RAG being treated as live operational truth
 Runbooks and postmortems explain how systems work. They do not prove what a production cluster is doing right now.
 
 Use live APIs for current state, RAG for documented knowledge, and reconciliation logic to detect contradictions.
-14.6 Gateway overlap
+### 14.6 Gateway overlap
 Kong, the LLM Gateway, the MCP Gateway, FastAPI, and the policy engine can become redundant if all implement their own routing, retries, caching, authorization, and rate limiting.
 
 Assign one owner to each responsibility:
-Responsibility	Primary owner
-External API ingress	Kong Gateway
-User identity	Keycloak
-Application/resource authorization	FastAPI authorization layer
-Model-provider routing and quotas	LLM Gateway / Kong AI Gateway, with clear division
-Tool discovery and execution boundary	MCP Gateway / Tool Runner
-Action risk and business policy	Policy/Risk Engine
-Durable workflow state	Workflow engine and PostgreSQL
-Distributed telemetry	OpenTelemetry
-Business audit history	Audit Service
+| Responsibility | Primary owner |
+| --- | --- |
+| External API ingress | Kong Gateway |
+| User identity | Keycloak |
+| Application/resource authorization | FastAPI authorization layer |
+| Model-provider routing and quotas | LLM Gateway / Kong AI Gateway, with clear division |
+| Tool discovery and execution boundary | MCP Gateway / Tool Runner |
+| Action risk and business policy | Policy/Risk Engine |
+| Durable workflow state | Workflow engine and PostgreSQL |
+| Distributed telemetry | OpenTelemetry |
+| Business audit history | Audit Service |
 
-14.7 Integration sprawl
+### 14.7 Integration sprawl
 Every cloud account, cluster, and ticketing system creates operational and security overhead.
 
 Build a standardized integration adapter interface with capability declarations, health checks, scoped credentials, pagination, timeout behavior, and structured error handling. Add providers through adapters instead of adding provider-specific logic throughout every agent.
-14.8 No isolation between tenants at runtime
+### 14.8 No isolation between tenants at runtime
 Database filters are not enough. Background workers, caches, vector retrieval, traces, queues, and secrets all need tenant-aware boundaries.
 
 For high-assurance customers, consider dedicated worker pools, dedicated databases or schemas, separate encryption keys, or dedicated deployment cells. These are stronger isolation options, not requirements for every tenant.
 
+## Implementation checklist
 
-checklist::--
 Phase 1 — Secure foundation (Weeks 1–3)
 - [x] Keycloak OIDC and user lifecycle
 - [x] Organization/project/environment data model
@@ -1393,54 +1283,55 @@ Phase 5 — Scale and optimize (After initial release)
 - [x] Canary releases and rollback automation
 - [x] Compliance evidence and disaster recovery exercises
 
+## Recommended technology stack
 
+| Area | Recommendation |
+| --- | --- |
+| Frontend | Next.js |
+| Application API | FastAPI |
+| Authentication | Keycloak with OIDC; local email/password and enterprise federation |
+| API gateway | Kong Gateway |
+| AI gateway | Kong AI Gateway or a separate LLM gateway; avoid redundant routing layers |
+| Agent orchestration | LangGraph with persistent checkpoints |
+| Durable execution | PostgreSQL-backed queue initially or a dedicated workflow platform as needs grow |
+| Primary database | PostgreSQL |
+| Vector search | pgvector with hybrid search and strict ACL filtering |
+| Cache | Redis |
+| Policy | OPA/Rego, Cedar, or a rigorously tested policy service |
+| Tool integration | MCP Gateway plus a constrained execution service |
+| Credentials | Cloud secrets manager or equivalent; workload identity where available |
+| Telemetry | OpenTelemetry Collector plus metrics, logs, and trace backends |
+| Evaluation | Versioned datasets, deterministic tests, model-based scoring, and production outcome feedback |
+| Deployment | Containers, Kubernetes where justified, infrastructure as code, CI/CD, and controlled rollout |
+| Audit | Separate durable, access-controlled business audit records |
 
+## Infrastructure ownership
 
-Area	Recommendation
-Frontend	Next.js
-Application API	FastAPI
-Authentication	Keycloak with OIDC; local email/password and enterprise federation
-API gateway	Kong Gateway
-AI gateway	Kong AI Gateway or a separate LLM gateway; avoid redundant routing layers
-Agent orchestration	LangGraph with persistent checkpoints
-Durable execution	PostgreSQL-backed queue initially or a dedicated workflow platform as needs grow
-Primary database	PostgreSQL
-Vector search	pgvector with hybrid search and strict ACL filtering
-Cache	Redis
-Policy	OPA/Rego, Cedar, or a rigorously tested policy service
-Tool integration	MCP Gateway plus a constrained execution service
-Credentials	Cloud secrets manager or equivalent; workload identity where available
-Telemetry	OpenTelemetry Collector plus metrics, logs, and trace backends
-Evaluation	Versioned datasets, deterministic tests, model-based scoring, and production outcome feedback
-Deployment	Containers, Kubernetes where justified, infrastructure as code, CI/CD, and controlled rollout
-Audit	Separate durable, access-controlled business audit records
+| Owner | Manages |
+| --- | --- |
+| Terraform | VPC, GKE cluster, Cloud SQL, Redis, Pub/Sub, Cloud Storage, IAM, KMS, Secret Manager configuration, Artifact Registry, DNS and approved certificate resources |
+| GKE Gateway controller | Load-balancer resources generated from Gateway API configuration |
+| Argo CD + Helm | Kubernetes deployments, services, ConfigMaps, policies, routes and application configuration |
+| GitHub Actions | Testing, scanning, image building, publishing and controlled promotion requests |
+| GitHub repositories | Application source, Terraform modules, Helm charts and GitOps configuration |
 
-
-Owner	Manages
-Terraform	VPC, GKE cluster, Cloud SQL, Redis, Pub/Sub, Cloud Storage, IAM, KMS, Secret Manager configuration, Artifact Registry, DNS and approved certificate resources
-GKE Gateway controller	Load-balancer resources generated from Gateway API configuration
-Argo CD + Helm	Kubernetes deployments, services, ConfigMaps, policies, routes and application configuration
-GitHub Actions	Testing, scanning, image building, publishing and controlled promotion requests
-GitHub repositories	Application source, Terraform modules, Helm charts and GitOps configuration
-
-
-
-Pending edge cases and how to resolve them
+## Pending edge cases and how to resolve them
 These are the most important issues to close before calling the platform production-ready.
-Priority	Edge case	Required solution
-Critical	Development, staging and production share one cluster	Use separate namespaces, identities, secrets, quotas and network controls initially. Decide whether production requires a separate GCP project and cluster for stronger isolation. A single shared cluster remains a common failure domain.
-Critical	Cross-tenant data leakage	Enforce server-derived tenant context, database authorization/RLS where applicable, tenant-filtered vector retrieval and authorization tests for every endpoint and tool.
-Critical	Worker restarts or duplicate Pub/Sub messages	Persist workflow state, use idempotency keys, record action receipts, configure dead-letter topics and reconcile external state before retrying writes.
-Critical	Unauthorized or unsafe remediation	Use OPA/Rego, constrained MCP tools, least-privilege credentials, approval expiry and immediate pre-execution policy checks. Fail closed when authorization or policy evaluation is unavailable.
-Critical	Secrets exposed through images, logs or pipelines	Use Secret Manager, workload identity, restricted CI permissions, secret scanning and log redaction. Never rely on long-lived service-account key files.
-High	Cloud SQL or Keycloak outage	Configure database HA and backups, run multiple application replicas where appropriate, test recovery, and fail closed for new privileged actions if durable state is unavailable.
-High	Model quota exhaustion or Vertex AI outage	Apply bounded retries, per-tenant budgets and approved fallback model profiles. Otherwise return partial findings or defer the workflow without performing unsafe actions.
-High	RAG contains stale or unauthorized documents	Maintain document versions, ACLs, source provenance and deletion workflows. Use live provider APIs to verify current resource state.
-High	Kubernetes pods exceed available resources	Set CPU/memory requests and limits, probe endpoints, define autoscaling behavior and test GKE Autopilot scheduling constraints.
-High	Policy or approval changes while a request is pending	Bind approval to the exact action and target, expire it, and revalidate the current policy and resource state before execution.
-High	Database or model cost grows unexpectedly	Add per-tenant quotas, model/token budgets, connection-pool limits, retention policies and budget alerts.
-High	Publicly exposed admin endpoints	Keep Kong admin interfaces and Argo CD administration private; tightly restrict Keycloak administration and production deployment permissions.
-Medium	Certificate or DNS cutover fails	Verify certificate provisioning, DNS records, load-balancer health and rollback instructions before moving production traffic.
-Medium	Observability outage or sensitive telemetry	Use bounded telemetry buffering, structured redaction, retention limits and monitoring-backend failure alerts. Durable business audits must not rely solely on telemetry export.
-Medium	Integration permissions expire or drift	Add health checks, permission validation, rotation, reauthorization and revocation workflows.
-Medium	GCP inventory results are stale	Use Cloud Asset Inventory for discovery and historical metadata, then query live APIs before high-impact operational decisions.
+| Priority | Edge case | Required solution |
+| --- | --- | --- |
+| Critical | Development, staging and production share one cluster | Use separate namespaces, identities, secrets, quotas and network controls initially. Decide whether production requires a separate GCP project and cluster for stronger isolation. A single shared cluster remains a common failure domain. |
+| Critical | Cross-tenant data leakage | Enforce server-derived tenant context, database authorization/RLS where applicable, tenant-filtered vector retrieval and authorization tests for every endpoint and tool. |
+| Critical | Worker restarts or duplicate Pub/Sub messages | Persist workflow state, use idempotency keys, record action receipts, configure dead-letter topics and reconcile external state before retrying writes. |
+| Critical | Unauthorized or unsafe remediation | Use OPA/Rego, constrained MCP tools, least-privilege credentials, approval expiry and immediate pre-execution policy checks. Fail closed when authorization or policy evaluation is unavailable. |
+| Critical | Secrets exposed through images, logs or pipelines | Use Secret Manager, workload identity, restricted CI permissions, secret scanning and log redaction. Never rely on long-lived service-account key files. |
+| High | Cloud SQL or Keycloak outage | Configure database HA and backups, run multiple application replicas where appropriate, test recovery, and fail closed for new privileged actions if durable state is unavailable. |
+| High | Model quota exhaustion or Vertex AI outage | Apply bounded retries, per-tenant budgets and approved fallback model profiles. Otherwise return partial findings or defer the workflow without performing unsafe actions. |
+| High | RAG contains stale or unauthorized documents | Maintain document versions, ACLs, source provenance and deletion workflows. Use live provider APIs to verify current resource state. |
+| High | Kubernetes pods exceed available resources | Set CPU/memory requests and limits, probe endpoints, define autoscaling behavior and test GKE Autopilot scheduling constraints. |
+| High | Policy or approval changes while a request is pending | Bind approval to the exact action and target, expire it, and revalidate the current policy and resource state before execution. |
+| High | Database or model cost grows unexpectedly | Add per-tenant quotas, model/token budgets, connection-pool limits, retention policies and budget alerts. |
+| High | Publicly exposed admin endpoints | Keep Kong admin interfaces and Argo CD administration private; tightly restrict Keycloak administration and production deployment permissions. |
+| Medium | Certificate or DNS cutover fails | Verify certificate provisioning, DNS records, load-balancer health and rollback instructions before moving production traffic. |
+| Medium | Observability outage or sensitive telemetry | Use bounded telemetry buffering, structured redaction, retention limits and monitoring-backend failure alerts. Durable business audits must not rely solely on telemetry export. |
+| Medium | Integration permissions expire or drift | Add health checks, permission validation, rotation, reauthorization and revocation workflows. |
+| Medium | GCP inventory results are stale | Use Cloud Asset Inventory for discovery and historical metadata, then query live APIs before high-impact operational decisions. |
