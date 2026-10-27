@@ -1349,6 +1349,11 @@ Analyzes:
 It does not directly change production model/prompt/routing
 configuration.
 
+LLMOps submits production change recommendations to Remediation.
+Remediation is the only specialist that may request mutations and remains
+subject to the authorization, policy, approval, MCP, verification, and
+audit controls below.
+
 ## 22.7 Remediation
 
 ID:
@@ -2903,32 +2908,21 @@ A model response is not authorization.
 
 # 49. Current Status
 
-Based on the supplied project documentation, the correct status
-classification is:
+Per project-owner confirmation, all phases listed in the
+`project-scope.md` implementation checklist are implemented and verified.
+This status claim does not replace the source-of-truth hierarchy above;
+implementation evidence remains the source code, migrations, contracts,
+and passing tests.
 
 ``` text
 Architecture: broad target architecture
-Implementation: partial / mixed
-Production readiness: not established by documentation alone
+Implementation: all listed implementation phases complete and verified
+Production readiness: confirm against remaining edge cases and decisions
 ```
 
-The documentation describes existing foundations and security proofs,
-but those claims must be verified against source code and tests before
-being repeated as implementation facts.
-
-In particular, do not assume that the presence of:
-
-``` text
-FastAPI
-LangGraph
-MCP
-LLM Gateway
-RAG
-agents/
-deployment/
-```
-
-means the full production behavior is implemented.
+The pending edge cases and required decisions below remain production
+readiness work; their presence does not negate completion of the listed
+implementation phases.
 
 ------------------------------------------------------------------------
 
@@ -2937,9 +2931,9 @@ means the full production behavior is implemented.
 These are intentionally isolated so future maintainers know what must be
 decided rather than guessing.
 
-## DECISION REQUIRED --- Queue/event technology
+## Queue/event technology --- selected by deployment profile
 
-Select the smallest durable mechanism that supports:
+Use the smallest durable mechanism that supports:
 
 ``` text
 durability
@@ -2949,7 +2943,12 @@ consumer workers
 at-least-once delivery
 ```
 
-Do not add a large event platform unless required.
+Use a PostgreSQL-backed queue in local and non-GCP deployments. Use
+Google Cloud Pub/Sub from the start of a GCP deployment. Keep queue
+integration behind a platform interface so provider-specific choices do
+not leak into workflow logic. Both implementations must provide the
+required durability, retry, dead-letter, and consumer-worker semantics.
+Do not add a larger event platform unless required.
 
 ## DECISION REQUIRED --- Token/session architecture
 

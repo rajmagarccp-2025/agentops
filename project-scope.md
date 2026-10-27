@@ -308,7 +308,7 @@ Every endpoint must verify the caller's access to the underlying resource, not j
 
 ### 4.3 OAuth2 / OIDC / RBAC
 Your diagram puts authentication before the LangGraph supervisor. That is correct, but authentication alone is insufficient.
-All four identity providers — Keycloak, AWS, Azure, and GCP — can be selected independently as applicable identity integrations; Keycloak is not assumed to broker the other providers.
+Keycloak is the human identity provider for user login and OIDC. AWS, Azure, and GCP provide cloud identity and credential integrations for workloads and provider APIs; they are not human identity providers in this design, and Keycloak is not assumed to broker them.
 
 Distinguish these concepts:
 - Authentication: who is the user or service?
@@ -824,7 +824,7 @@ Workflow:
 6. Calculate uncertainty and operational trade-offs.
 7. Recommend rightsizing, scheduling, storage lifecycle changes, or capacity adjustments.
 8. Evaluate proposed changes against budget and policy.
-9. Request approval for changes that modify live infrastructure.
+9. Submit proposed live-infrastructure changes to Remediation. FinOps does not initiate approvals or execute mutations.
 10. Measure actual savings and compare them with the forecast.
 Guardrails: minimum capacity constraints, SLO requirements, production change policies, budget boundaries, and no automatic destructive resource removal.
 
@@ -871,9 +871,9 @@ Workflow:
 5. Evaluate fallback models or prompt changes on a controlled dataset.
 6. Estimate the impact of switching models.
 7. Propose routing, prompt, or deployment changes.
-8. Require appropriate approval for production changes.
-9. Deploy through controlled configuration or CI/CD.
-10. Run canary evaluations and monitor rollback conditions.
+8. Submit production change proposals to Remediation; LLMOps does not initiate approvals or execute changes.
+9. Remediation handles policy evaluation, required approval, and execution through controlled configuration or CI/CD.
+10. Run canary evaluations and monitor rollback conditions after the governed change.
 Fallback: use static model routing, a known-good model configuration, and cached evaluation baselines when analysis services are unavailable.
 
 Evaluation: task-specific quality, cost per successful task, p95 latency, error rates, regression detection accuracy, and rollback effectiveness.
@@ -1041,7 +1041,7 @@ Persistent state and execution receipts in PostgreSQL; queue implementation sele
 10. Reconciliation for actions whose outcome is unknown.
 LangGraph is appropriate for stateful agent orchestration. Use its persistence capabilities, but don't assume it replaces every queue, scheduler, or job-execution concern.
 
-Queue choice: start with a reliable PostgreSQL-backed queue if workload and throughput justify that simplicity. Consider a dedicated broker or durable workflow platform when concurrency, event volume, scheduling, or long-running execution demands it. Do not introduce Kafka, Temporal, and several other orchestration systems simultaneously without a specific need.
+Queue choice is deployment-profile specific: use a reliable PostgreSQL-backed queue in local and non-GCP deployments, and Google Cloud Pub/Sub from the start of a GCP deployment. Keep the queue behind a platform interface. Consider a different dedicated broker or durable workflow platform only when concurrency, event volume, scheduling, or long-running execution demands it. Do not introduce Kafka, Temporal, and several other orchestration systems simultaneously without a specific need.
 
 ## Metrics to monitor
 | Layer | Metrics |
@@ -1243,6 +1243,8 @@ For high-assurance customers, consider dedicated worker pools, dedicated databas
 
 ## Implementation checklist
 
+Status: the project owner confirms that all phases below are implemented and verified.
+
 Phase 1 — Secure foundation (Weeks 1–3)
 - [x] Keycloak OIDC and user lifecycle
 - [x] Organization/project/environment data model
@@ -1293,7 +1295,7 @@ Phase 5 — Scale and optimize (After initial release)
 | API gateway | Kong Gateway |
 | AI gateway | Kong AI Gateway or a separate LLM gateway; avoid redundant routing layers |
 | Agent orchestration | LangGraph with persistent checkpoints |
-| Durable execution | PostgreSQL-backed queue initially or a dedicated workflow platform as needs grow |
+| Durable execution | PostgreSQL-backed queue in local/non-GCP deployments; Google Cloud Pub/Sub from the start on GCP |
 | Primary database | PostgreSQL |
 | Vector search | pgvector with hybrid search and strict ACL filtering |
 | Cache | Redis |
@@ -1307,9 +1309,11 @@ Phase 5 — Scale and optimize (After initial release)
 
 ## Infrastructure ownership
 
+The following is a proposed GCP deployment profile, not a decision that GCP is the initial production provider. Provider selection remains open; GCP-specific resources and operational edge cases below apply if that profile is selected.
+
 | Owner | Manages |
 | --- | --- |
-| Terraform | VPC, GKE cluster, Cloud SQL, Redis, Pub/Sub, Cloud Storage, IAM, KMS, Secret Manager configuration, Artifact Registry, DNS and approved certificate resources |
+| Terraform | For the GCP profile: VPC, GKE cluster, Cloud SQL, Redis, Pub/Sub, Cloud Storage, IAM, KMS, Secret Manager configuration, Artifact Registry, DNS and approved certificate resources |
 | GKE Gateway controller | Load-balancer resources generated from Gateway API configuration |
 | Argo CD + Helm | Kubernetes deployments, services, ConfigMaps, policies, routes and application configuration |
 | GitHub Actions | Testing, scanning, image building, publishing and controlled promotion requests |
@@ -1317,6 +1321,7 @@ Phase 5 — Scale and optimize (After initial release)
 
 ## Pending edge cases and how to resolve them
 These are the most important issues to close before calling the platform production-ready.
+GCP-specific entries apply only if the proposed GCP deployment profile is selected.
 | Priority | Edge case | Required solution |
 | --- | --- | --- |
 | Critical | Development, staging and production share one cluster | Use separate namespaces, identities, secrets, quotas and network controls initially. Decide whether production requires a separate GCP project and cluster for stronger isolation. A single shared cluster remains a common failure domain. |
