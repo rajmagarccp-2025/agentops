@@ -1,74 +1,489 @@
-name: Deploy AgentOps application to GCP
+name: Deploy AgentOps to GCP
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
     inputs:
-      deployment_mode:
-        description: Build and publish this commit, or redeploy an existing image tag
+      plan_infrastructure:
+        description: Create a review-only OpenTofu plan (also created automatically when apply is selected)
         required: true
-        default: build_and_deploy
-        type: choice
-        options:
-          - build_and_deploy
-          - deploy_existing
+        default: false
+        type: boolean
+      apply_infrastructure:
+        description: Apply the saved plan after protected prod-environment approval
+        required: true
+        default: false
+        type: boolean
       image_tag:
-        description: Full 40-character commit SHA; required for existing-image redeployment
+        description: Optional immutable image tag; defaults to this commit SHA
         required: false
+        default: ""
         type: string
-      run_migrations:
-        description: Run the chart's database migration job (review application migration risk first)
+      deploy_application:
+        description: Deploy the application after infrastructure and images are ready
         required: true
         default: false
         type: boolean
 
 concurrency:
-  group: agentops-gcp-production
+  group: agentops-gcp-prod
   cancel-in-progress: false
 
 permissions:
   contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_NUMBER: "226029690939"
+  TF_STATE_BUCKET: project-cks-aug2026-agentops-tofu-state
+  TF_STATE_OBJECT: agentops/prod/default.tfstate
 
 jobs:
   quality:
-    name: Run application and configuration checks
-    uses: ./.github/workflows/ci.yml
-    permissions:
-      contents: read
+    name: Test and validate before provisioning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
 
-  release:
-    name: Scan, publish, and deploy application
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install backend and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./backend
+          pip install pytest pytest-asyncio ruff
+
+      - name: Lint and test backend
+        run: |
+          ruff check backend/src
+          pytest backend/tests
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Typecheck frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run typecheck
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+      - name: Validate GCP chart
+        run: |
+          helm lint deployment/helm/platform --values deployment/helm/platform/values-gcp.yaml
+          helm template agentops-platform deployment/helm/platform \
+            --namespace validation \
+            --values deployment/helm/platform/values-gcp.yaml \
+            --set global.environment=production \
+            --set namespace=validation
+      - name: Validate rendered Kong configuration
+        run: |
+          set -euo pipefail
+          rendered_config="$RUNNER_TEMP/platform-rendered.yaml"
+          kong_config="$RUNNER_TEMP/kong.yml"
+          helm template agentops-platform deployment/helm/platform \
+            --namespace validation \
+            --values deployment/helm/platform/values-gcp.yaml \
+            --set global.environment=production \
+            --set namespace=validation > "$rendered_config"
+          ruby -ryaml -e '
+            documents = YAML.load_stream(File.read(ARGV[0]))
+            config = documents.find do |document|
+              document.is_a?(Hash) &&
+                document["kind"] == "ConfigMap" &&
+                document.dig("metadata", "name") == "agentops-platform-kong-config"
+            end
+            abort "Rendered Kong ConfigMap was not found" unless config
+            File.write(ARGV[1], config.fetch("data").fetch("kong.yml"))
+          ' "$rendered_config" "$kong_config"
+          docker run --rm \
+            --env KONG_DATABASE=off \
+            --volume "$kong_config:/kong.yml:ro" \
+            --entrypoint kong kong:3.9.1 config parse /kong.yml
+
+  infra:
+    name: Plan GCP infrastructure (review only)
     needs: quality
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.plan_infrastructure == true || inputs.apply_infrastructure == true) }}
     runs-on: ubuntu-latest
     environment: prod
-    permissions:
-      contents: read
-      id-token: write
     env:
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-      GCP_PROJECT_NUMBER: ${{ vars.GCP_PROJECT_NUMBER }}
+      GCP_PROJECT_NAME: ${{ vars.GCP_PROJECT_NAME }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      GCP_ENVIRONMENT: ${{ vars.GCP_ENVIRONMENT }}
+      GCP_NAMESPACE: ${{ vars.GCP_NAMESPACE }}
+      GCP_DOMAIN: ${{ vars.GCP_DOMAIN }}
+      GCP_CLUSTER_NAME: ${{ vars.GCP_CLUSTER_NAME }}
+      GCP_REPOSITORY: ${{ vars.GCP_REPOSITORY }}
+      SERVICE_ACCOUNT_NAME: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate protected deployment configuration
+        env:
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_DEPLOYER_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          : "${GCP_PROJECT_ID:?Set the prod environment variable GCP_PROJECT_ID}"
+          : "${GCP_PROJECT_NAME:?Set the prod environment variable GCP_PROJECT_NAME}"
+          : "${GCP_REGION:?Set the prod environment variable GCP_REGION}"
+          : "${GCP_ENVIRONMENT:?Set the prod environment variable GCP_ENVIRONMENT}"
+          : "${GCP_NAMESPACE:?Set the prod environment variable GCP_NAMESPACE}"
+          : "${GCP_DOMAIN:?Set the prod environment variable GCP_DOMAIN}"
+          : "${GCP_CLUSTER_NAME:?Set the prod environment variable GCP_CLUSTER_NAME}"
+          : "${GCP_REPOSITORY:?Set the prod environment variable GCP_REPOSITORY}"
+          : "${SERVICE_ACCOUNT_NAME:?Set the prod environment variable GCP_RUNTIME_SERVICE_ACCOUNT}"
+          : "${GCP_WORKLOAD_IDENTITY_PROVIDER:?Set the prod environment secret GCP_WORKLOAD_IDENTITY_PROVIDER}"
+          : "${GCP_DEPLOYER_SERVICE_ACCOUNT:?Set the prod environment secret GCP_SERVICE_ACCOUNT}"
+          if [[ "$GCP_ENVIRONMENT" != "prod" ]]; then
+            echo "This workflow is restricted to the prod environment."
+            exit 1
+          fi
+          if [[ ! "$GCP_DOMAIN" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]; then
+            echo "GCP_DOMAIN must be set to the approved DNS hostname."
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.8.8
+
+      - name: Verify the existing remote state bucket
+        run: |
+          set -euo pipefail
+          bucket_config="$(gcloud storage buckets describe "gs://$TF_STATE_BUCKET" \
+            --project "$GCP_PROJECT_ID" --format=json)"
+          printf '%s' "$bucket_config" | jq -e \
+            '.versioning.enabled == true and
+             .iamConfiguration.uniformBucketLevelAccess.enabled == true and
+             .iamConfiguration.publicAccessPrevention == "enforced"' >/dev/null
+          gcloud storage ls "gs://$TF_STATE_BUCKET/$TF_STATE_OBJECT" >/dev/null
+
+      - name: Initialize existing backend, validate, and create reviewable plan
+        working-directory: infrastructure/terraform/gcp
+        env:
+          TF_VAR_database_password: ${{ secrets.TF_DATABASE_PASSWORD }}
+          TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+          TF_VAR_project_name: ${{ vars.GCP_PROJECT_NAME }}
+          TF_VAR_environment: ${{ vars.GCP_ENVIRONMENT }}
+          TF_VAR_region: ${{ vars.GCP_REGION }}
+          TF_VAR_namespace: ${{ vars.GCP_NAMESPACE }}
+          TF_VAR_service_account_name: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          : "${TF_VAR_database_password:?Set the prod environment secret TF_DATABASE_PASSWORD}"
+          tofu init -input=false
+          tofu validate
+          tofu plan -input=false -out=tfplan
+
+      - name: Encrypt saved plan for protected apply
+        if: ${{ inputs.apply_infrastructure == true }}
+        working-directory: infrastructure/terraform/gcp
+        env:
+          TF_PLAN_ENCRYPTION_KEY: ${{ secrets.TF_PLAN_ENCRYPTION_KEY }}
+        run: |
+          set -euo pipefail
+          : "${TF_PLAN_ENCRYPTION_KEY:?Set TF_PLAN_ENCRYPTION_KEY in the prod environment}"
+          if [[ "${#TF_PLAN_ENCRYPTION_KEY}" -lt 32 ]]; then
+            echo "TF_PLAN_ENCRYPTION_KEY must contain at least 32 characters."
+            exit 1
+          fi
+          openssl enc -aes-256-cbc -pbkdf2 -salt -iter 600000 \
+            -pass env:TF_PLAN_ENCRYPTION_KEY \
+            -in tfplan -out tfplan.enc
+
+      - name: Upload encrypted saved plan
+        if: ${{ inputs.apply_infrastructure == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tofu-plan-${{ github.run_id }}
+          path: infrastructure/terraform/gcp/tfplan.enc
+          if-no-files-found: error
+          retention-days: 1
+
+  infra-apply:
+    name: Apply reviewed GCP infrastructure plan
+    needs: infra
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.apply_infrastructure == true }}
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+    outputs:
+      database_private_ip: ${{ steps.tofu-outputs.outputs.database_private_ip }}
+      redis_host: ${{ steps.tofu-outputs.outputs.redis_host }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.8.8
+
+      - name: Verify the existing remote state bucket and object
+        run: |
+          set -euo pipefail
+          : "${GCP_PROJECT_ID:?Set the prod environment variable GCP_PROJECT_ID}"
+          bucket_config="$(gcloud storage buckets describe "gs://$TF_STATE_BUCKET" \
+            --project "$GCP_PROJECT_ID" --format=json)"
+          printf '%s' "$bucket_config" | jq -e \
+            '.versioning.enabled == true and
+             .iamConfiguration.uniformBucketLevelAccess.enabled == true and
+             .iamConfiguration.publicAccessPrevention == "enforced"' >/dev/null
+          gcloud storage ls "gs://$TF_STATE_BUCKET/$TF_STATE_OBJECT" >/dev/null
+
+      - name: Download encrypted plan from this workflow run
+        uses: actions/download-artifact@v4
+        with:
+          name: tofu-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/tofu-plan
+
+      - name: Decrypt and apply the reviewed plan
+        working-directory: infrastructure/terraform/gcp
+        env:
+          TF_PLAN_ENCRYPTION_KEY: ${{ secrets.TF_PLAN_ENCRYPTION_KEY }}
+          ENCRYPTED_PLAN: ${{ runner.temp }}/tofu-plan/tfplan.enc
+        run: |
+          set -euo pipefail
+          : "${TF_PLAN_ENCRYPTION_KEY:?Set TF_PLAN_ENCRYPTION_KEY in the prod environment}"
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+            -pass env:TF_PLAN_ENCRYPTION_KEY \
+            -in "$ENCRYPTED_PLAN" -out tfplan
+          tofu init -input=false
+          tofu apply -input=false tfplan
+
+      - name: Export provisioned runtime endpoints
+        id: tofu-outputs
+        working-directory: infrastructure/terraform/gcp
+        run: |
+          set -euo pipefail
+          echo "database_private_ip=$(tofu output -raw database_private_ip)" >> "$GITHUB_OUTPUT"
+          echo "redis_host=$(tofu output -raw redis_host)" >> "$GITHUB_OUTPUT"
+
+  build-push:
+    name: Build and push container images
+    needs: quality
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_application == true }}
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_PROJECT_NAME: ${{ vars.GCP_PROJECT_NAME }}
+      GCP_ENVIRONMENT: ${{ vars.GCP_ENVIRONMENT }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      GCP_REPOSITORY: ${{ vars.GCP_REPOSITORY }}
+      IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate immutable image tag
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
+        run: |
+          set -euo pipefail
+          : "${GCP_PROJECT_ID:?Set GCP_PROJECT_ID in the prod environment}"
+          : "${GCP_PROJECT_NAME:?Set GCP_PROJECT_NAME in the prod environment}"
+          : "${GCP_REGION:?Set GCP_REGION in the prod environment}"
+          : "${GCP_REPOSITORY:?Set GCP_REPOSITORY to the existing Artifact Registry repository}"
+          : "${GCP_WORKLOAD_IDENTITY_PROVIDER:?Set the GCP workload identity provider secret in the prod environment}"
+          : "${GCP_SERVICE_ACCOUNT:?Set the GCP deployer service account secret in the prod environment}"
+          if [[ "$GCP_ENVIRONMENT" != "prod" ]]; then
+            echo "GCP_ENVIRONMENT must be prod for this workflow."
+            exit 1
+          fi
+          if [[ ! "$IMAGE_TAG" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "IMAGE_TAG must be a 40-character commit SHA."
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
+
+      - name: Build API image
+        run: docker build -t "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-api:$IMAGE_TAG" -f docker/backend.Dockerfile .
+
+      - name: Build worker image
+        run: docker build -t "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-worker:$IMAGE_TAG" -f docker/worker.Dockerfile .
+
+      - name: Build frontend image
+        run: docker build -t "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-frontend:$IMAGE_TAG" -f docker/frontend.Dockerfile .
+
+      - name: Scan API image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/platform-api:${{ env.IMAGE_TAG }}
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+      - name: Scan worker image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/platform-worker:${{ env.IMAGE_TAG }}
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+      - name: Scan frontend image before push
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/platform-frontend:${{ env.IMAGE_TAG }}
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+      - name: Push API image
+        run: docker push "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-api:$IMAGE_TAG"
+
+      - name: Push worker image
+        run: docker push "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-worker:$IMAGE_TAG"
+
+      - name: Push frontend image
+        run: docker push "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-frontend:$IMAGE_TAG"
+
+  deploy:
+    name: Deploy app to GKE
+    needs: [quality, build-push, infra-apply]
+    if: >-
+      ${{
+        always() &&
+        !cancelled() &&
+        github.event_name == 'workflow_dispatch' &&
+        inputs.deploy_application == true &&
+        needs.quality.result == 'success' &&
+        needs.build-push.result == 'success' &&
+        (inputs.apply_infrastructure != true || needs.infra-apply.result == 'success')
+      }}
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       GCP_PROJECT_NAME: ${{ vars.GCP_PROJECT_NAME }}
       GCP_REGION: ${{ vars.GCP_REGION }}
       GCP_ENVIRONMENT: ${{ vars.GCP_ENVIRONMENT }}
       GCP_NAMESPACE: ${{ vars.GCP_NAMESPACE }}
       GCP_CLUSTER_NAME: ${{ vars.GCP_CLUSTER_NAME }}
       GCP_REPOSITORY: ${{ vars.GCP_REPOSITORY }}
-      GCP_RUNTIME_SERVICE_ACCOUNT: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
+      SERVICE_ACCOUNT_NAME: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
       GCS_DOCUMENT_BUCKET: ${{ vars.GCS_DOCUMENT_BUCKET }}
-      DEPLOYMENT_MODE: ${{ github.event_name == 'push' && 'build_and_deploy' || inputs.deployment_mode }}
       IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
-      RUN_MIGRATIONS: ${{ inputs.run_migrations == true && 'true' || 'false' }}
+      DATABASE_PRIVATE_IP: ${{ needs.infra-apply.outputs.database_private_ip }}
+      REDIS_HOST: ${{ needs.infra-apply.outputs.redis_host }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate production deployment configuration
+        run: |
+          set -euo pipefail
+          : "${GCP_PROJECT_ID:?Set GCP_PROJECT_ID in the prod environment}"
+          : "${GCP_REGION:?Set GCP_REGION in the prod environment}"
+          : "${GCP_NAMESPACE:?Set GCP_NAMESPACE in the prod environment}"
+          : "${GCP_CLUSTER_NAME:?Set GCP_CLUSTER_NAME in the prod environment}"
+          : "${GCP_REPOSITORY:?Set GCP_REPOSITORY to the existing Artifact Registry repository}"
+          : "${SERVICE_ACCOUNT_NAME:?Set GCP_RUNTIME_SERVICE_ACCOUNT in the prod environment}"
+          : "${GCS_DOCUMENT_BUCKET:?Set GCS_DOCUMENT_BUCKET to the pre-provisioned document archive bucket in the prod environment}"
+          : "${GCP_PROJECT_NAME:?Set GCP_PROJECT_NAME to the Terraform resource prefix in the prod environment}"
+          : "${GCP_ENVIRONMENT:?Set GCP_ENVIRONMENT to the Terraform environment in the prod environment}"
+          : "${GCP_WORKLOAD_IDENTITY_PROVIDER:?Set the GCP workload identity provider secret in the prod environment}"
+          : "${GCP_SERVICE_ACCOUNT:?Set the GCP deployer service account secret in the prod environment}"
+          if [[ "$GCP_ENVIRONMENT" != "prod" ]]; then
+            echo "GCP_ENVIRONMENT must be prod for this workflow."
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
         with:
-          python-version: "3.12"
-      - name: Validate target, immutable tag, and protected configuration
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          install_components: gke-gcloud-auth-plugin
+
+      - name: Get cluster credentials
+        run: |
+          gcloud container clusters get-credentials "$GCP_CLUSTER_NAME" \
+            --region "$GCP_REGION" \
+            --project "$GCP_PROJECT_ID"
+          kubectl create namespace "$GCP_NAMESPACE" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Set up OpenTofu
+        if: ${{ inputs.apply_infrastructure != true }}
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.8.8
+
+      - name: Read runtime endpoints from existing state
+        if: ${{ inputs.apply_infrastructure != true }}
+        working-directory: infrastructure/terraform/gcp
         env:
-          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          GCP_PUBLISHER_SERVICE_ACCOUNT: ${{ secrets.GCP_PUBLISHER_SERVICE_ACCOUNT }}
-          GCP_DEPLOYER_SERVICE_ACCOUNT: ${{ secrets.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+          TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+          TF_VAR_region: ${{ vars.GCP_REGION }}
+        run: |
+          set -euo pipefail
+          gcloud storage ls "gs://$TF_STATE_BUCKET/$TF_STATE_OBJECT" >/dev/null
+          tofu init -input=false
+          echo "DATABASE_PRIVATE_IP=$(tofu output -raw database_private_ip)" >> "$GITHUB_ENV"
+          echo "REDIS_HOST=$(tofu output -raw redis_host)" >> "$GITHUB_ENV"
+
+      - name: Validate applied infrastructure endpoints
+        if: ${{ inputs.apply_infrastructure == true }}
+        run: |
+          set -euo pipefail
+          : "${DATABASE_PRIVATE_IP:?The infrastructure apply did not return database_private_ip}"
+          : "${REDIS_HOST:?The infrastructure apply did not return redis_host}"
+
+      - name: Publish runtime secrets to Secret Manager and Kubernetes
+        env:
           TF_DATABASE_PASSWORD: ${{ secrets.TF_DATABASE_PASSWORD }}
           JWT_DEMO_SECRET: ${{ secrets.JWT_DEMO_SECRET }}
           OIDC_ISSUER_URL: ${{ secrets.OIDC_ISSUER_URL }}
@@ -76,77 +491,15 @@ jobs:
           OIDC_CLIENT_SECRET: ${{ secrets.OIDC_CLIENT_SECRET }}
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF" == "refs/heads/main" ]] || {
-            echo "Production application deployment must run from the protected main branch."
-            exit 1
-          }
-          : "${GCP_PROJECT_ID:?Set the prod environment variable GCP_PROJECT_ID}"
-          : "${GCP_PROJECT_NUMBER:?Set the prod environment variable GCP_PROJECT_NUMBER}"
-          : "${GCP_PROJECT_NAME:?Set the prod environment variable GCP_PROJECT_NAME}"
-          : "${GCP_REGION:?Set the prod environment variable GCP_REGION}"
-          : "${GCP_ENVIRONMENT:?Set the prod environment variable GCP_ENVIRONMENT}"
-          : "${GCP_NAMESPACE:?Set the prod environment variable GCP_NAMESPACE}"
-          : "${GCP_CLUSTER_NAME:?Set the prod environment variable GCP_CLUSTER_NAME}"
-          : "${GCP_REPOSITORY:?Set the prod environment variable GCP_REPOSITORY}"
-          : "${GCP_RUNTIME_SERVICE_ACCOUNT:?Set GCP_RUNTIME_SERVICE_ACCOUNT in the prod environment}"
-          : "${GCS_DOCUMENT_BUCKET:?Set GCS_DOCUMENT_BUCKET in the prod environment}"
-          : "${GCP_WORKLOAD_IDENTITY_PROVIDER:?Set GCP_WORKLOAD_IDENTITY_PROVIDER in the prod environment}"
-          : "${GCP_DEPLOYER_SERVICE_ACCOUNT:?Set GCP_DEPLOYER_SERVICE_ACCOUNT in the prod environment}"
           : "${TF_DATABASE_PASSWORD:?Set TF_DATABASE_PASSWORD in the prod environment}"
           : "${JWT_DEMO_SECRET:?Set JWT_DEMO_SECRET in the prod environment}"
           : "${OIDC_ISSUER_URL:?Set OIDC_ISSUER_URL in the prod environment}"
           : "${OIDC_CLIENT_ID:?Set OIDC_CLIENT_ID in the prod environment}"
           : "${OIDC_CLIENT_SECRET:?Set OIDC_CLIENT_SECRET in the prod environment}"
-          [[ "$GCP_ENVIRONMENT" == "prod" ]] || {
-            echo "Production application deployment requires GCP_ENVIRONMENT=prod."
-            exit 1
-          }
-          [[ "$GCP_PROJECT_NUMBER" =~ ^[0-9]+$ ]] || {
-            echo "GCP_PROJECT_NUMBER must contain only digits."
-            exit 1
-          }
-          [[ "$GCP_PROJECT_NAME" =~ ^[a-z][a-z0-9-]{0,29}$ ]] || {
-            echo "GCP_PROJECT_NAME does not match the Terraform resource-prefix format."
-            exit 1
-          }
-          [[ "$GCP_CLUSTER_NAME" == "$GCP_PROJECT_NAME-$GCP_ENVIRONMENT" ]] || {
-            echo "GCP_CLUSTER_NAME must match the Terraform-managed cluster name."
-            exit 1
-          }
-          [[ "$GCP_REPOSITORY" == "$GCP_PROJECT_NAME-$GCP_ENVIRONMENT" ]] || {
-            echo "GCP_REPOSITORY must match the Terraform-managed Artifact Registry repository."
-            exit 1
-          }
-          [[ "$GCP_NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#GCP_NAMESPACE} -le 63 ]] || {
-            echo "GCP_NAMESPACE must be a Kubernetes DNS label of at most 63 characters."
-            exit 1
-          }
-          [[ "$GCP_RUNTIME_SERVICE_ACCOUNT" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || {
-            echo "GCP_RUNTIME_SERVICE_ACCOUNT does not match the Terraform service-account format."
-            exit 1
-          }
-          [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "IMAGE_TAG must be a lowercase 40-character Git commit SHA."
-            exit 1
-          }
-          case "$DEPLOYMENT_MODE" in
-            build_and_deploy)
-              [[ "$IMAGE_TAG" == "$GITHUB_SHA" ]] || {
-                echo "Builds may only publish the SHA of the checked-out commit."
-                exit 1
-              }
-              : "${GCP_PUBLISHER_SERVICE_ACCOUNT:?Set GCP_PUBLISHER_SERVICE_ACCOUNT in the prod environment}"
-              ;;
-            deploy_existing) ;;
-            *)
-              echo "Unsupported deployment mode."
-              exit 1
-              ;;
-          esac
           case "$OIDC_ISSUER_URL" in
             https://*) ;;
             *)
-              echo "OIDC_ISSUER_URL must use HTTPS."
+              echo "OIDC_ISSUER_URL must use HTTPS and be reachable by production users."
               exit 1
               ;;
           esac
@@ -156,236 +509,16 @@ jobs:
               exit 1
               ;;
           esac
-
-      - name: Build API, worker, and frontend images
-        if: ${{ env.DEPLOYMENT_MODE == 'build_and_deploy' }}
-        run: |
-          set -euo pipefail
-          registry="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY"
-          docker build -t "$registry/platform-api:$IMAGE_TAG" -f docker/backend.Dockerfile .
-          docker build -t "$registry/platform-worker:$IMAGE_TAG" -f docker/worker.Dockerfile .
-          docker build -t "$registry/platform-frontend:$IMAGE_TAG" -f docker/frontend.Dockerfile .
-
-      - name: Scan API image before publication
-        if: ${{ env.DEPLOYMENT_MODE == 'build_and_deploy' }}
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPOSITORY }}/platform-api:${{ env.IMAGE_TAG }}
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-
-      - name: Scan worker image before publication
-        if: ${{ env.DEPLOYMENT_MODE == 'build_and_deploy' }}
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPOSITORY }}/platform-worker:${{ env.IMAGE_TAG }}
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-
-      - name: Scan frontend image before publication
-        if: ${{ env.DEPLOYMENT_MODE == 'build_and_deploy' }}
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPOSITORY }}/platform-frontend:${{ env.IMAGE_TAG }}
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-
-      - name: Authenticate as Artifact Registry publisher
-        if: ${{ env.DEPLOYMENT_MODE == 'build_and_deploy' }}
-        uses: google-github-actions/auth@v3
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_PUBLISHER_SERVICE_ACCOUNT }}
-
-      - name: Set up gcloud for Artifact Registry publication
-        if: ${{ env.DEPLOYMENT_MODE == 'build_and_deploy' }}
-        uses: google-github-actions/setup-gcloud@v3
-
-      - name: Verify repository and prevent immutable-tag replacement
-        if: ${{ env.DEPLOYMENT_MODE == 'build_and_deploy' }}
-        run: |
-          set -euo pipefail
-          project_number="$(gcloud projects describe "$GCP_PROJECT_ID" --format='value(projectNumber)')"
-          [[ "$project_number" == "$GCP_PROJECT_NUMBER" ]] || {
-            echo "The configured project ID and number do not identify the same GCP project."
-            exit 1
-          }
-          repository_format="$(gcloud artifacts repositories describe "$GCP_REPOSITORY" \
-            --location "$GCP_REGION" --project "$GCP_PROJECT_ID" --format='value(format)')"
-          [[ "$repository_format" == "DOCKER" ]] || {
-            echo "The configured Artifact Registry repository is missing or is not a Docker repository."
-            exit 1
-          }
-          images_json="$(gcloud artifacts docker images list \
-            "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY" \
-            --include-tags --format=json)"
-          for image in platform-api platform-worker platform-frontend; do
-            if jq -e --arg tag "$IMAGE_TAG" \
-              'any(.[]; any(.tags[]?; . == $tag or endswith(":" + $tag)))' \
-              <<< "$images_json" >/dev/null; then
-              echo "Refusing to overwrite existing immutable tag $IMAGE_TAG for $image."
-              exit 1
-            fi
-          done
-
-      - name: Configure Docker and publish approved images
-        if: ${{ env.DEPLOYMENT_MODE == 'build_and_deploy' }}
-        run: |
-          set -euo pipefail
-          gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
-          registry="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY"
-          docker push "$registry/platform-api:$IMAGE_TAG"
-          docker push "$registry/platform-worker:$IMAGE_TAG"
-          docker push "$registry/platform-frontend:$IMAGE_TAG"
-
-      - name: Authenticate as application deployer
-        uses: google-github-actions/auth@v3
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_DEPLOYER_SERVICE_ACCOUNT }}
-
-      - name: Set up gcloud and GKE authentication
-        uses: google-github-actions/setup-gcloud@v3
-        with:
-          install_components: gke-gcloud-auth-plugin
-
-      - name: Verify existing GCP infrastructure readiness
-        run: |
-          set -euo pipefail
-          project_number="$(gcloud projects describe "$GCP_PROJECT_ID" --format='value(projectNumber)')"
-          [[ "$project_number" == "$GCP_PROJECT_NUMBER" ]] || {
-            echo "The configured project ID and number do not identify the same GCP project."
-            exit 1
-          }
-          cluster_status="$(gcloud container clusters describe "$GCP_CLUSTER_NAME" \
-            --region "$GCP_REGION" --project "$GCP_PROJECT_ID" --format='value(status)')"
-          [[ "$cluster_status" == "RUNNING" ]] || {
-            echo "The configured GKE cluster is missing or not RUNNING."
-            exit 1
-          }
-          sql_instance_name="$GCP_PROJECT_NAME-$GCP_ENVIRONMENT-db"
-          sql_instance="$(gcloud sql instances describe "$sql_instance_name" \
-            --project "$GCP_PROJECT_ID" --format=json)"
-          [[ "$(jq -r '.state // empty' <<< "$sql_instance")" == "RUNNABLE" ]] || {
-            echo "The Terraform-managed Cloud SQL instance is missing or not RUNNABLE."
-            exit 1
-          }
-          database_private_ip="$(jq -r \
-            '[.ipAddresses[]? | select(.type == "PRIVATE") | .ipAddress][0] // empty' \
-            <<< "$sql_instance")"
-          [[ -n "$database_private_ip" ]] || {
-            echo "The Cloud SQL instance has no private IP address."
-            exit 1
-          }
-          redis_instance_name="$GCP_PROJECT_NAME-$GCP_ENVIRONMENT-redis"
-          redis_instance="$(gcloud redis instances describe "$redis_instance_name" \
-            --region "$GCP_REGION" --project "$GCP_PROJECT_ID" --format=json)"
-          [[ "$(jq -r '.state // empty' <<< "$redis_instance")" == "READY" ]] || {
-            echo "The Terraform-managed Memorystore Redis instance is missing or not READY."
-            exit 1
-          }
-          redis_host="$(jq -r '.host // empty' <<< "$redis_instance")"
-          [[ -n "$redis_host" ]] || {
-            echo "The Memorystore Redis instance has no host endpoint."
-            exit 1
-          }
-          repository_format="$(gcloud artifacts repositories describe "$GCP_REPOSITORY" \
-            --location "$GCP_REGION" --project "$GCP_PROJECT_ID" --format='value(format)')"
-          [[ "$repository_format" == "DOCKER" ]] || {
-            echo "The configured Artifact Registry repository is missing or is not usable."
-            exit 1
-          }
-          gcloud storage buckets describe "gs://$GCS_DOCUMENT_BUCKET" \
-            --project "$GCP_PROJECT_ID" --format=json >/dev/null
-          gcloud iam service-accounts describe \
-            "$GCP_RUNTIME_SERVICE_ACCOUNT@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
-            --project "$GCP_PROJECT_ID" >/dev/null
-          for secret_id in \
-            agentops-database-url \
-            agentops-redis-url \
-            agentops-jwt-secret \
-            agentops-oidc-issuer \
-            agentops-oidc-client-id \
-            agentops-oidc-client-secret
-          do
-            gcloud secrets describe "$secret_id" --project "$GCP_PROJECT_ID" >/dev/null
-          done
-          printf 'DATABASE_PRIVATE_IP=%s\nREDIS_HOST=%s\n' \
-            "$database_private_ip" "$redis_host" >> "$GITHUB_ENV"
-
-      - name: Pull and scan existing images for redeployment
-        if: ${{ env.DEPLOYMENT_MODE == 'deploy_existing' }}
-        run: |
-          set -euo pipefail
-          gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
-          registry="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY"
-          docker pull "$registry/platform-api:$IMAGE_TAG"
-          docker pull "$registry/platform-worker:$IMAGE_TAG"
-          docker pull "$registry/platform-frontend:$IMAGE_TAG"
-
-      - name: Scan existing API image
-        if: ${{ env.DEPLOYMENT_MODE == 'deploy_existing' }}
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPOSITORY }}/platform-api:${{ env.IMAGE_TAG }}
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-
-      - name: Scan existing worker image
-        if: ${{ env.DEPLOYMENT_MODE == 'deploy_existing' }}
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPOSITORY }}/platform-worker:${{ env.IMAGE_TAG }}
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-
-      - name: Scan existing frontend image
-        if: ${{ env.DEPLOYMENT_MODE == 'deploy_existing' }}
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_REPOSITORY }}/platform-frontend:${{ env.IMAGE_TAG }}
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-
-      - name: Obtain existing cluster credentials
-        run: |
-          set -euo pipefail
-          gcloud container clusters get-credentials "$GCP_CLUSTER_NAME" \
-            --region "$GCP_REGION" \
-            --project "$GCP_PROJECT_ID"
-          kubectl cluster-info
-          kubectl create namespace "$GCP_NAMESPACE" \
-            --dry-run=client -o yaml | kubectl apply -f -
-
-      - name: Seed only empty Secret Manager secrets and project current versions
-        env:
-          TF_DATABASE_PASSWORD: ${{ secrets.TF_DATABASE_PASSWORD }}
-          JWT_DEMO_SECRET: ${{ secrets.JWT_DEMO_SECRET }}
-          OIDC_ISSUER_URL: ${{ secrets.OIDC_ISSUER_URL }}
-          OIDC_CLIENT_ID: ${{ secrets.OIDC_CLIENT_ID }}
-          OIDC_CLIENT_SECRET: ${{ secrets.OIDC_CLIENT_SECRET }}
-        run: |
-          set -euo pipefail
           issuer_metadata="$(curl --fail --silent --show-error --location \
             --retry 5 --retry-delay 10 \
             "$OIDC_ISSUER_URL/.well-known/openid-configuration")"
           printf '%s' "$issuer_metadata" | jq -e --arg issuer "$OIDC_ISSUER_URL" \
             '.issuer == $issuer' >/dev/null
+
           encoded_password="$(python -c 'import os; from urllib.parse import quote; print(quote(os.environ["TF_DATABASE_PASSWORD"], safe=""))')"
           database_url="postgresql+psycopg://platform:${encoded_password}@${DATABASE_PRIVATE_IP}:5432/agentops?sslmode=require"
           redis_url="redis://${REDIS_HOST}:6379/0"
+
           seed_secret_if_empty() {
             local secret_id="$1"
             local initial_value="$2"
@@ -395,7 +528,7 @@ jobs:
             if [[ -z "$existing_versions" ]]; then
               printf '%s' "$initial_value" |
                 gcloud secrets versions add "$secret_id" \
-                  --project "$GCP_PROJECT_ID" --data-file=- >/dev/null
+                  --project "$GCP_PROJECT_ID" --data-file=-
             fi
           }
           seed_secret_if_empty agentops-database-url "$database_url"
@@ -404,6 +537,7 @@ jobs:
           seed_secret_if_empty agentops-oidc-issuer "$OIDC_ISSUER_URL"
           seed_secret_if_empty agentops-oidc-client-id "$OIDC_CLIENT_ID"
           seed_secret_if_empty agentops-oidc-client-secret "$OIDC_CLIENT_SECRET"
+
           secret_env_file="$(mktemp)"
           trap 'rm -f "$secret_env_file"' EXIT
           database_url="$(gcloud secrets versions access latest --secret=agentops-database-url --project "$GCP_PROJECT_ID")"
@@ -418,28 +552,27 @@ jobs:
           kubectl create secret generic platform-secrets \
             --namespace "$GCP_NAMESPACE" \
             --from-env-file="$secret_env_file" \
-            --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+            --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Set up Helm
         uses: azure/setup-helm@v5
-      - name: Upgrade application release
+
+      - name: Deploy Helm chart
         run: |
-          set -euo pipefail
           helm upgrade --install agentops-platform deployment/helm/platform \
             --namespace "$GCP_NAMESPACE" \
             --create-namespace \
             --values deployment/helm/platform/values-gcp.yaml \
             --set global.environment=production \
             --set namespace="$GCP_NAMESPACE" \
-            --set serviceAccount.name="$GCP_RUNTIME_SERVICE_ACCOUNT" \
-            --set-string "serviceAccount.annotations.iam\.gke\.io/gcp-service-account=$GCP_RUNTIME_SERVICE_ACCOUNT@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
+            --set serviceAccount.name="$SERVICE_ACCOUNT_NAME" \
+            --set-string "serviceAccount.annotations.iam\.gke\.io/gcp-service-account=$SERVICE_ACCOUNT_NAME@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
             --set-string rag.gcsDocumentBucket="$GCS_DOCUMENT_BUCKET" \
             --set-string secretManager.projectId="$GCP_PROJECT_ID" \
             --set-string llm.vertexProjectId="$GCP_PROJECT_ID" \
             --set-string workflowQueue.projectId="$GCP_PROJECT_ID" \
             --set-string workflowQueue.topicId="$GCP_PROJECT_NAME-$GCP_ENVIRONMENT-events" \
             --set-string workflowQueue.subscriptionId="$GCP_PROJECT_NAME-$GCP_ENVIRONMENT-events" \
-            --set migration.enabled="$RUN_MIGRATIONS" \
             --set migration.image.repository="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-api" \
             --set migration.image.tag="$IMAGE_TAG" \
             --set api.image.repository="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-api" \
@@ -450,9 +583,8 @@ jobs:
             --set frontend.image.tag="$IMAGE_TAG" \
             --wait --timeout 10m
 
-      - name: Verify application rollouts
+      - name: Verify application and platform sidecar-service rollouts
         run: |
-          set -euo pipefail
           for deployment in \
             agentops-platform-api \
             agentops-platform-worker \
@@ -465,4 +597,3 @@ jobs:
               --namespace "$GCP_NAMESPACE" \
               --timeout=5m
           done
-          kubectl get deployments --namespace "$GCP_NAMESPACE"
