@@ -285,7 +285,7 @@ class LLMGateway:
                 )
             )
             increment("llm.requests.failed")
-            raise ProviderError("No configured LLM provider completed the request") from last_error
+            raise ProviderError("All configured LLM routes failed") from last_error
         except ProviderError:
             if quota_reserved:
                 quota_reserved = False

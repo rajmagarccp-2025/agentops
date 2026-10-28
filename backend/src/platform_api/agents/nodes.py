@@ -231,6 +231,7 @@ def discovery_node(state: AgentState) -> AgentState:
         f"Coverage: {summary.coverage_percentage}%\n"
         "Provide evidence-backed discovery findings and recommendations."
     )
+    llm_principal = _principal(state, "llm:invoke")
     _ = llm_gateway.complete(
         LLMRequest(
             task="discovery_topology_analysis",
@@ -243,7 +244,7 @@ def discovery_node(state: AgentState) -> AgentState:
                 ChatMessage(role=MessageRole.USER, content=prompt),
             ],
         ),
-        principal,
+        llm_principal,
     )
 
     # 6. Structured Findings (OBSERVED / INFERRED / RECOMMENDED)
