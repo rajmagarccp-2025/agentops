@@ -123,16 +123,23 @@ Set these **Actions secrets** without printing their values:
 - `GCP_WORKLOAD_IDENTITY_PROVIDER`: approved Workload Identity provider resource
 - `GCP_SERVICE_ACCOUNT`: dedicated GitHub deployer service-account email
 - `TF_DATABASE_PASSWORD`: unique database password
+- `TF_PLAN_ENCRYPTION_KEY`: random value of at least 32 characters used only
+  for the one-day encrypted saved plan artifact when infrastructure apply is
+  explicitly requested
 - `JWT_DEMO_SECRET`: random secret of at least 32 bytes
 - `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`: approved OIDC client
   configuration
 
 The runtime service account and GitHub deployer are separate identities. The
-workflow runs quality checks on pushes, but infrastructure planning is manual
-and review-only; this workflow contains no infrastructure apply. Application
-deployment is separately opt-in and still depends on a successful plan. Review
-the plan and expected GCP charges before approving any later, separately
-implemented apply path.
+workflow runs quality checks on pushes. Infrastructure plan/apply and
+application deployment are manual dispatch choices. `apply_infrastructure=true`
+creates a saved plan, encrypts it for one-day artifact storage, and waits for a
+separate approval in the protected `prod` environment before applying that
+exact plan. Review the plan in the preceding job logs and expected GCP charges
+before approving. Existing-infrastructure application releases do not require
+an infrastructure plan. The workflow fails closed if the existing state
+bucket or expected state object is absent; state bootstrap/migration remains a
+separate reviewed operator procedure.
 
 Enable GitHub secret scanning and push protection for the repository before
 using deployment credentials. Review staged changes and workflow logs for

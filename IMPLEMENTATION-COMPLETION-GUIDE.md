@@ -906,24 +906,39 @@ tofu plan -input=false -var="project_id=$PROJECT_ID" \
   -var="service_account_name=agentops-platform-sa-gcp"
 ```
 
-For rollout, use the existing protected GitHub Actions deployment workflow with
-an immutable image tag and an approved `deploy_application=true`. After it
-completes:
+For an application release against already-provisioned infrastructure, run the
+protected GitHub Actions deployment workflow with `deploy_application=true`
+and both infrastructure inputs false. For an initial or changed infrastructure
+release, set `apply_infrastructure=true` and `deploy_application=true`, review
+the plan in the workflow logs, and approve the protected apply job. The workflow
+uses the saved plan and deploys only after the apply and image scans succeed.
+After it completes:
 
 ```bash
 gcloud container clusters get-credentials "$CLUSTER" \
   --region "$REGION" --project "$PROJECT_ID"
 kubectl -n "$NAMESPACE" get deploy,pods,svc,hpa,pdb
-kubectl -n "$NAMESPACE" rollout status deploy/platform-api --timeout=10m
-kubectl -n "$NAMESPACE" rollout status deploy/platform-worker --timeout=10m
-kubectl -n "$NAMESPACE" rollout status deploy/platform-frontend --timeout=10m
+kubectl -n "$NAMESPACE" rollout status deploy/agentops-platform-api --timeout=10m
+kubectl -n "$NAMESPACE" rollout status deploy/agentops-platform-worker --timeout=10m
+kubectl -n "$NAMESPACE" rollout status deploy/agentops-platform-frontend --timeout=10m
+kubectl -n "$NAMESPACE" get svc,endpoints,endpointslices
 kubectl -n "$NAMESPACE" get events --sort-by=.metadata.creationTimestamp
 ```
 
-Adjust deployment names to the rendered Helm release if they differ; do not
-declare success based only on a command that matched no resources. Then use
-`kubectl port-forward` in a separate terminal if you need to check internal
-readiness. Use authenticated synthetic requests against the public FQDN and
+Verify the named resources exist and all expected replicas are ready; do not
+declare success based only on a command that matched no resources. The API
+readiness endpoint checks database, Redis, and workflow-worker availability.
+For an internal smoke test, use separate terminals:
+
+```bash
+kubectl -n "$NAMESPACE" port-forward svc/agentops-platform-api 18000:8000
+curl --fail --show-error http://127.0.0.1:18000/api/v1/health
+curl --fail --show-error http://127.0.0.1:18000/api/v1/health/ready |
+  jq -e '.status == "ok" and .dependencies.database == "ok" and
+    .dependencies.redis == "ok" and .dependencies.workflow_worker == "ok"'
+```
+
+Use authenticated synthetic requests against the public FQDN and
 verify database,
 Redis, queue, model, secret, policy, telemetry, and audit paths in their
 respective systems.

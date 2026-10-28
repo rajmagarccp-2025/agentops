@@ -50,6 +50,7 @@ Required `prod` environment secrets:
 - `GCP_WORKLOAD_IDENTITY_PROVIDER`
 - `GCP_SERVICE_ACCOUNT`
 - `TF_DATABASE_PASSWORD`
+- `TF_PLAN_ENCRYPTION_KEY` (required only when applying infrastructure)
 - `JWT_DEMO_SECRET`
 - `OIDC_ISSUER_URL`
 - `OIDC_CLIENT_ID`
@@ -65,23 +66,48 @@ substitute. Use these values:
 | `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full Workload Identity Provider resource name from GCP, such as `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID`. |
 | `GCP_SERVICE_ACCOUNT` | Service account email that the GitHub Actions workflow is allowed to impersonate. Workload Identity Federation is used; do not create or store a service-account JSON key. |
 | `TF_DATABASE_PASSWORD` | Password for the provisioned PostgreSQL user. |
+| `TF_PLAN_ENCRYPTION_KEY` | Random value of at least 32 characters used only to encrypt the short-lived saved OpenTofu plan artifact between the plan and protected apply jobs. |
 | `JWT_DEMO_SECRET` | A strong, randomly generated signing secret for the application. |
 | `OIDC_ISSUER_URL` | Exact HTTPS issuer URL for the production identity provider/realm. It must be reachable by the workflow and users; localhost is rejected. |
 | `OIDC_CLIENT_ID` | Client identifier registered with that identity provider. |
 | `OIDC_CLIENT_SECRET` | Client secret for that registered client. Treat it as confidential. |
 
 For each entry, select **Add secret**, enter the exact name and value, and save.
+Generate the optional plan key with `openssl rand -base64 48`; store it only
+as the `prod` environment secret.
 Do not put real values in source control, example manifests, screenshots, or
 chat. The workflow reads these values from the `prod` environment and publishes
 the database URL, JWT secret, and OIDC settings to Google Secret Manager and the
 Kubernetes `platform-secrets` Secret during deployment.
 
-The workflow bootstraps a dedicated, versioned GCS bucket for OpenTofu state,
-provisions infrastructure, and builds/pushes the images. Application rollout is
-opt-in: set the workflow dispatch input `deploy_application` to `true`, or set
-the `DEPLOY_APPLICATION` Actions variable to `true` for automatic rollout on
-pushes to `main`. With the default setting, infrastructure and images are still
-provisioned, but the application is not rolled out.
+Pushes to `main` run validation only. Production actions are explicit
+`workflow_dispatch` choices and are protected by the `prod` GitHub environment:
+
+- **Application release to existing infrastructure:** set
+  `deploy_application=true`; leave `plan_infrastructure` and
+  `apply_infrastructure` false. The workflow builds all three images, scans
+  them for HIGH/CRITICAL vulnerabilities, pushes only after all scans pass, and
+  deploys the immutable commit-SHA tag. It reads database and Redis endpoints
+  from the existing remote state without requiring a new infrastructure plan.
+- **Review an infrastructure plan:** set `plan_infrastructure=true`; leave
+  `apply_infrastructure` and `deploy_application` false. This does not apply
+  infrastructure or deploy the application.
+- **Provision and release together:** set `apply_infrastructure=true` and
+  `deploy_application=true`. The workflow creates a plan, uploads only an
+  encrypted one-day artifact, then waits for a separate protected `prod`
+  environment approval before applying that exact saved plan. Review the
+  OpenTofu plan in the plan job logs before approving the apply job. The
+  application deploy starts only after the apply, image scans, and pushes
+  succeed.
+- **Provision infrastructure only:** set `apply_infrastructure=true` and
+  `deploy_application=false`; review and approve the plan/apply jobs. This
+  does not build or deploy application images.
+
+The workflow requires the existing versioned state bucket and expected state
+object; it intentionally fails rather than silently initializing a new state
+backend. Bootstrap or migrate remote state only through a separately reviewed
+operator procedure. A successful plan alone is never evidence that resources
+were applied or are ready.
 
 To check GKE access, scheduling, and Artifact Registry image pulls without
 rolling out the application or requiring OIDC runtime secrets, manually run
@@ -148,8 +174,10 @@ environment before any production cutover.
 See `infrastructure/terraform/gcp/README.md` for remote-state and drift-check
 commands.
 
-Set `DEPLOY_APPLICATION` to `true` only after the production Keycloak issuer and
-client secrets are configured and the issuer discovery check succeeds.
+Select `deploy_application=true` in a new `workflow_dispatch` run only after the
+production Keycloak issuer and client secrets are configured and the issuer
+discovery check succeeds. A push or rerun of a push-triggered workflow cannot
+deploy.
 
 The bootstrap Argo CD manifest in `deployment/argocd/bootstrap/argocd-install.yaml`
 keeps the admin password out of source control; the initial admin password is generated by
