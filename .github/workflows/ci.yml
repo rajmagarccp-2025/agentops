@@ -146,5 +146,4 @@ jobs:
           scan-type: image
           image-ref: platform-frontend:${{ github.sha }}
           severity: CRITICAL,HIGH
-          ignore-unfixed: true
           exit-code: "1"

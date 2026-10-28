@@ -250,10 +250,20 @@ jobs:
           docker build -t "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-worker:$IMAGE_TAG" -f docker/worker.Dockerfile .
           docker push "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-worker:$IMAGE_TAG"
 
-      - name: Build and push frontend image
+      - name: Build frontend image
         run: |
           docker build -t "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-frontend:$IMAGE_TAG" -f docker/frontend.Dockerfile .
-          docker push "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-frontend:$IMAGE_TAG"
+
+      - name: Scan frontend image before push
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_REPOSITORY }}/platform-frontend:${{ env.IMAGE_TAG }}
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+      - name: Push frontend image
+        run: docker push "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$GCP_REPOSITORY/platform-frontend:$IMAGE_TAG"
 
   deploy:
     name: Deploy app to GKE
