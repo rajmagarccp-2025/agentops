@@ -40,7 +40,7 @@ def create_app_engine():
             pool_pre_ping=True,
             pool_size=settings.database_pool_size,
             max_overflow=settings.database_max_overflow,
-            pool_timeout=2,
+            pool_timeout=settings.database_pool_timeout_seconds,
             pool_recycle=settings.database_pool_recycle_seconds,
         )
         # Test connection with a fast 2-second limit.

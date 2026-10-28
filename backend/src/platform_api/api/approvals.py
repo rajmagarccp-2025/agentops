@@ -7,6 +7,7 @@ from platform_api.agents.service import agent_runtime
 from platform_api.governance.repository import approval_repository
 from platform_api.governance.schemas import ApprovalRequest, ApprovalStatus
 from platform_api.governance.service import decide_approval
+from platform_api.mcp.registry import ToolAuthorizationError, ToolPolicyUnavailableError
 from platform_api.security import Principal, require_permission
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
@@ -62,6 +63,16 @@ async def approve(
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ToolPolicyUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Policy decision service is unavailable; remediation was not executed.",
+        ) from exc
+    except ToolAuthorizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Policy denied the approved remediation.",
+        ) from exc
 
 
 @router.post("/{request_id}/reject", response_model=ApprovalRequest)

@@ -1,0 +1,43 @@
+{{- if .Values.kong.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "platform.fullname" . }}-kong-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kong
+data:
+  kong.yml: |
+    _format_version: "3.0"
+    _transform: true
+    services:
+      - name: platform-api
+        url: http://{{ include "platform.fullname" . }}-api:{{ .Values.api.service.port }}
+        routes:
+          - name: platform-api
+            paths:
+              - /api/v1
+              - /v1
+            protocols:
+              - http
+              - https
+            strip_path: false
+            plugins:
+              - name: rate-limiting
+                config:
+                  minute: {{ .Values.kong.rateLimitPerMinute }}
+                  limit_by: ip
+                  policy: local
+                  fault_tolerant: false
+              - name: request-size-limiting
+                config:
+                  allowed_payload_size: {{ .Values.kong.maxRequestSizeMegabytes }}
+                  size_unit: megabytes
+    plugins:
+      - name: correlation-id
+        config:
+          header_name: X-Correlation-ID
+          generator: uuid
+          echo_downstream: true
+{{- end }}

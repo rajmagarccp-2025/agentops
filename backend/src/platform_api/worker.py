@@ -12,11 +12,18 @@ import sys
 import time
 import uuid
 
+from pydantic import ValidationError
+
 from platform_api.config import get_settings
 from platform_api.database import SessionLocal, init_db
 from platform_api.logging_config import configure_logging
 from platform_api.observability import increment
 from platform_api.secrets.lifecycle import archive_old_audit_events, process_secret_lifecycle
+from platform_api.workflow_pubsub import (
+    PubSubWorkflowTransport,
+    PulledWorkflowMessage,
+    parse_dispatch_message,
+)
 from platform_api.workflow_queue import WorkflowJobRecord, WorkflowJobStatus, workflow_queue
 
 logger = logging.getLogger("platform_api.worker")
@@ -31,7 +38,12 @@ class BackgroundWorker:
         self._active_jobs: set[asyncio.Task[None]] = set()
         self._last_lifecycle_run = 0.0
         self._last_archive_run = 0.0
+        self._last_outbox_cleanup_run = 0.0
         self._last_heartbeat_run = 0.0
+        self._last_database_poll = 0.0
+        self._pubsub_transport = (
+            PubSubWorkflowTransport() if self.settings.workflow_queue_backend == "pubsub" else None
+        )
 
     async def start(self) -> None:
         self.is_running = True
@@ -64,6 +76,8 @@ class BackgroundWorker:
 
         if self._active_jobs:
             await asyncio.gather(*self._active_jobs, return_exceptions=True)
+        if self._pubsub_transport is not None:
+            await asyncio.to_thread(self._pubsub_transport.close)
         try:
             await asyncio.to_thread(
                 workflow_queue.record_worker_heartbeat,
@@ -107,15 +121,21 @@ class BackgroundWorker:
                 logger.exception("Could not persist worker heartbeat")
                 increment("workflow.worker.heartbeat_errors")
         available = self.settings.workflow_worker_concurrency - len(self._active_jobs)
-        for _ in range(max(0, available)):
-            job = workflow_queue.claim_next(
-                worker_id=self.worker_id,
-                lease_seconds=self.settings.workflow_job_lease_seconds,
-            )
-            if job is None:
-                break
-            task = asyncio.create_task(self._execute_job(job))
-            self._active_jobs.add(task)
+        if self._pubsub_transport is None:
+            await self._claim_database_jobs(available)
+        else:
+            await self._publish_outbox_messages()
+            try:
+                await self._pull_pubsub_messages(available)
+            except Exception:
+                self._last_database_poll = 0.0
+                logger.exception("Pub/Sub workflow pull failed; database polling remains active")
+                increment("workflow.pubsub.pull_errors")
+            if time.monotonic() - self._last_database_poll >= 30:
+                self._last_database_poll = time.monotonic()
+                await self._claim_database_jobs(
+                    self.settings.workflow_worker_concurrency - len(self._active_jobs)
+                )
         if now - self._last_lifecycle_run >= self.settings.secret_expiry_scan_interval_seconds:
             self._last_lifecycle_run = now
             try:
@@ -137,6 +157,152 @@ class BackgroundWorker:
             except Exception:
                 logger.exception("Audit archive task failed")
                 increment("audit.archive.errors")
+        if self._pubsub_transport is not None and now - self._last_outbox_cleanup_run >= 86_400:
+            self._last_outbox_cleanup_run = now
+            try:
+                purged = await asyncio.to_thread(
+                    workflow_queue.purge_published_outbox,
+                    retention_days=self.settings.workflow_outbox_retention_days,
+                )
+                increment("workflow.outbox.purged", purged)
+            except Exception:
+                logger.exception("Workflow outbox retention cleanup failed")
+                increment("workflow.outbox.cleanup_errors")
+
+    async def _claim_database_jobs(self, available: int) -> None:
+        for _ in range(max(0, available)):
+            job = await asyncio.to_thread(
+                workflow_queue.claim_next,
+                worker_id=self.worker_id,
+                lease_seconds=self.settings.workflow_job_lease_seconds,
+            )
+            if job is None:
+                break
+            task = asyncio.create_task(self._execute_job(job))
+            self._active_jobs.add(task)
+
+    async def _publish_outbox_messages(self) -> None:
+        if self._pubsub_transport is None:
+            return
+        messages = await asyncio.to_thread(
+            workflow_queue.claim_outbox_messages,
+            worker_id=self.worker_id,
+            limit=self.settings.workflow_pubsub_poll_batch_size,
+        )
+        for message in messages:
+            try:
+                from platform_api.workflow_pubsub import WorkflowDispatchMessage
+
+                await asyncio.to_thread(
+                    self._pubsub_transport.publish,
+                    WorkflowDispatchMessage.from_outbox(message),
+                )
+            except Exception as exc:
+                await asyncio.to_thread(
+                    workflow_queue.retry_outbox_publish,
+                    message.id,
+                    worker_id=self.worker_id,
+                    error=str(exc),
+                )
+                logger.warning("Pub/Sub outbox publish failed: outbox_id=%s", message.id)
+            else:
+                await asyncio.to_thread(
+                    workflow_queue.mark_outbox_published,
+                    message.id,
+                    worker_id=self.worker_id,
+                )
+
+    async def _pull_pubsub_messages(self, available: int) -> None:
+        if self._pubsub_transport is None or available <= 0:
+            return
+        messages = await asyncio.to_thread(
+            self._pubsub_transport.pull,
+            min(available, self.settings.workflow_pubsub_poll_batch_size),
+        )
+        for message in messages:
+            task = asyncio.create_task(self._handle_pubsub_delivery(message))
+            self._active_jobs.add(task)
+
+    async def _handle_pubsub_delivery(self, message: PulledWorkflowMessage) -> None:
+        if self._pubsub_transport is None:
+            return
+        try:
+            dispatch = parse_dispatch_message(message.data)
+        except (ValidationError, ValueError):
+            increment("workflow.pubsub.poison_messages")
+            await self._nack_pubsub_message(message.ack_id)
+            return
+
+        job = await asyncio.to_thread(workflow_queue.get, dispatch.job_id)
+        if (
+            job is None
+            or job.tenant_id != dispatch.tenant_id
+            or (job.idempotency_key or job.id) != dispatch.idempotency_key
+        ):
+            increment("workflow.pubsub.invalid_messages")
+            await self._nack_pubsub_message(message.ack_id)
+            return
+
+        claimed = await asyncio.to_thread(
+            workflow_queue.claim_by_id,
+            dispatch.job_id,
+            worker_id=self.worker_id,
+        )
+        if claimed is None:
+            # A prior delivery or the database recovery poll already owns this job.
+            await self._ack_pubsub_message(message.ack_id)
+            return
+
+        heartbeat = asyncio.create_task(self._extend_pubsub_deadline(message.ack_id))
+        try:
+            await self._execute_job(claimed)
+            current = await asyncio.to_thread(workflow_queue.get, dispatch.job_id)
+            if current is not None and current.status != WorkflowJobStatus.RUNNING:
+                await self._ack_pubsub_message(message.ack_id)
+            else:
+                await self._nack_pubsub_message(message.ack_id)
+        except Exception:
+            logger.exception("Pub/Sub workflow message processing failed")
+            await self._nack_pubsub_message(message.ack_id)
+        finally:
+            heartbeat.cancel()
+            try:
+                await heartbeat
+            except asyncio.CancelledError:
+                pass
+
+    async def _extend_pubsub_deadline(self, ack_id: str) -> None:
+        if self._pubsub_transport is None:
+            return
+        while True:
+            await asyncio.sleep(self.settings.workflow_pubsub_ack_extension_seconds // 3)
+            try:
+                await asyncio.to_thread(
+                    self._pubsub_transport.extend_ack_deadline,
+                    ack_id,
+                    self.settings.workflow_pubsub_ack_extension_seconds,
+                )
+            except Exception:
+                increment("workflow.pubsub.ack_extension_errors")
+                logger.warning("Could not extend Pub/Sub workflow acknowledgement deadline")
+
+    async def _ack_pubsub_message(self, ack_id: str) -> None:
+        if self._pubsub_transport is None:
+            return
+        try:
+            await asyncio.to_thread(self._pubsub_transport.acknowledge, ack_id)
+        except Exception:
+            increment("workflow.pubsub.ack_errors")
+            logger.warning("Could not acknowledge Pub/Sub workflow message")
+
+    async def _nack_pubsub_message(self, ack_id: str) -> None:
+        if self._pubsub_transport is None:
+            return
+        try:
+            await asyncio.to_thread(self._pubsub_transport.negative_acknowledge, ack_id)
+        except Exception:
+            increment("workflow.pubsub.nack_errors")
+            logger.warning("Could not reject Pub/Sub workflow message")
 
     async def _execute_job(self, job: WorkflowJobRecord) -> None:
         try:

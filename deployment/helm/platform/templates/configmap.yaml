@@ -15,3 +15,41 @@ data:
   DB_MAX_CONNECTIONS: {{ .Values.config.database.maxConnections | quote }}
   DB_SSL_MODE: {{ .Values.config.database.sslMode | quote }}
   REDIS_MAX_CONNECTIONS: {{ .Values.config.redis.maxConnections | quote }}
+  REDIS_CACHE_MAX_CONNECTIONS: {{ .Values.config.redis.cacheConnections | quote }}
+  REDIS_CACHE_TIMEOUT_SECONDS: {{ .Values.config.redis.cacheTimeoutSeconds | quote }}
+  SECRET_CACHE_TTL_SECONDS: {{ .Values.secretCache.ttlSeconds | quote }}
+  SECRET_CACHE_MAX_VALUE_BYTES: {{ .Values.secretCache.maxValueBytes | quote }}
+  WORKFLOW_QUEUE_BACKEND: {{ .Values.workflowQueue.backend | quote }}
+  WORKFLOW_PUBSUB_PROJECT_ID: {{ .Values.workflowQueue.projectId | quote }}
+  WORKFLOW_PUBSUB_TOPIC_ID: {{ .Values.workflowQueue.topicId | quote }}
+  WORKFLOW_PUBSUB_SUBSCRIPTION_ID: {{ .Values.workflowQueue.subscriptionId | quote }}
+  WORKFLOW_PUBSUB_POLL_BATCH_SIZE: {{ .Values.workflowQueue.pollBatchSize | quote }}
+  WORKFLOW_PUBSUB_ACK_EXTENSION_SECONDS: {{ .Values.workflowQueue.ackExtensionSeconds | quote }}
+  WORKFLOW_OUTBOX_RETENTION_DAYS: {{ .Values.workflowQueue.outboxRetentionDays | quote }}
+  LLM_PROVIDER: {{ .Values.llm.provider | quote }}
+  LLM_TIMEOUT_SECONDS: {{ .Values.llm.timeoutSeconds | quote }}
+  LLM_MAX_INPUT_TOKENS: {{ .Values.llm.maxInputTokens | quote }}
+  LLM_MAX_OUTPUT_TOKENS: {{ .Values.llm.maxOutputTokens | quote }}
+  LLM_MAX_TOTAL_TOKENS: {{ .Values.llm.maxTotalTokens | quote }}
+  LLM_TENANT_REQUESTS_PER_MINUTE: {{ .Values.llm.tenantRequestsPerMinute | quote }}
+  LLM_TENANT_DAILY_TOKEN_BUDGET: {{ .Values.llm.tenantDailyTokenBudget | quote }}
+  VERTEX_PROJECT_ID: {{ .Values.llm.vertexProjectId | quote }}
+  VERTEX_LOCATION: {{ .Values.llm.vertexLocation | quote }}
+  VERTEX_MODEL_REASONING: {{ .Values.llm.reasoningModel | quote }}
+  VERTEX_MODEL_FAST: {{ .Values.llm.fastModel | quote }}
+  VERTEX_MODEL_LONG_CONTEXT: {{ .Values.llm.longContextModel | quote }}
+  VERTEX_MODEL_STRUCTURED: {{ .Values.llm.structuredModel | quote }}
+  VERTEX_MAX_OUTPUT_TOKENS: {{ .Values.llm.vertexMaxOutputTokens | quote }}
+  VERTEX_MAX_CONCURRENT_REQUESTS: {{ .Values.llm.maxConcurrentRequests | quote }}
+  RAG_EMBEDDING_PROVIDER: {{ .Values.llm.embeddingProvider | quote }}
+  VERTEX_EMBEDDING_MODEL: {{ .Values.llm.embeddingModel | quote }}
+  VERTEX_EMBEDDING_DIMENSIONS: {{ .Values.llm.embeddingDimensions | quote }}
+  RAG_DOCUMENT_STORAGE_BACKEND: {{ .Values.rag.documentStorageBackend | quote }}
+  GCS_DOCUMENT_BUCKET: {{ .Values.rag.gcsDocumentBucket | quote }}
+  RAG_DOCUMENT_MAX_BYTES: {{ .Values.rag.maxDocumentBytes | quote }}
+  GCP_SECRET_MANAGER_PROJECT_ID: {{ .Values.secretManager.projectId | quote }}
+  OPA_URL: {{ if .Values.opa.enabled }}{{ printf "http://%s-opa.%s.svc:%d" (include "platform.fullname" .) .Values.namespace 8181 | quote }}{{ else }}""{{ end }}
+  OPA_REQUIRED: {{ .Values.opa.enabled | quote }}
+  OPA_TIMEOUT_SECONDS: {{ .Values.opa.timeoutSeconds | quote }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ if .Values.telemetry.enabled }}{{ printf "http://%s-otel-collector.%s.svc:4317" (include "platform.fullname" .) .Values.namespace | quote }}{{ else }}""{{ end }}
+  OTEL_EXPORTER_REQUIRED: {{ .Values.telemetry.enabled | quote }}

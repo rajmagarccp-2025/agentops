@@ -10,6 +10,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
+from opentelemetry.util.types import AttributeValue
 from sqlalchemy import select
 
 from platform_api.agents.models import AgentRunRecord, AgentStepRecord
@@ -28,6 +29,12 @@ from platform_api.agents.nodes import (
 )
 from platform_api.agents.state import AgentRoute, AgentState
 from platform_api.database import SessionLocal, engine
+from platform_api.governance.repository import approval_repository
+from platform_api.governance.service import (
+    consume_approval,
+    mark_approval_executed,
+    reauthorize_execution,
+)
 from platform_api.mcp.gateway import tool_registry
 from platform_api.observability import increment, span
 from platform_api.security import Principal
@@ -215,6 +222,7 @@ class AgentRuntime:
             if job.run_id is None:
                 raise RuntimeError("Idempotent agent job does not have a run ID")
             return self.get(job.run_id)
+        increment("workflow.jobs.enqueued")
         correlation_id = str(uuid4())
         return cast(AgentState, {
             "run_id": run_id,
@@ -304,7 +312,7 @@ class AgentRuntime:
         from platform_api.observability import record_workflow_metrics
 
         wf_start = perf_counter()
-        span_attrs: dict[str, object] = {
+        span_attrs: dict[str, AttributeValue] = {
             "request_id": correlation_id,
             "correlation_id": correlation_id,
             "trace_id": correlation_id,
@@ -627,18 +635,40 @@ class AgentRuntime:
             roles=frozenset(),
             permissions=frozenset({"tools:execute"}),
         )
+        approval_id = state.get("approval_id")
+        if not isinstance(approval_id, str):
+            raise ValueError("Approved remediation is missing its approval reference")
+        approval = approval_repository.get(state["tenant_id"], approval_id)
+        if approval.run_id != run_id:
+            raise ValueError("Approval request is not bound to this agent run")
+        parameters: dict[str, object] = {
+            "namespace": state.get("environment", "production"),
+            "deployment": state.get("target_resource", "checkout-api"),
+            "replicas": 4,
+        }
+        expected_resources = [
+            f"deployment/{parameters['namespace']}/{parameters['deployment']}"
+        ]
+        reauthorize_execution(
+            approval,
+            expected_tenant_id=state["tenant_id"],
+            expected_action="scale_deployment",
+            expected_resources=expected_resources,
+            expected_parameters=parameters,
+            current_evidence_count=max(1, len(state.get("evidence", []))),
+        )
         execution = tool_registry.execute(
             "kubernetes.scale_deployment",
-            {
-                "namespace": state.get("environment", "production"),
-                "deployment": state.get("target_resource", "checkout-api"),
-                "replicas": 4,
-            },
+            parameters,
             principal,
             run_id,
             False,
             approved=True,
+            approval_context=approval.model_dump(mode="json"),
+            approval_consumer=lambda: consume_approval(state["tenant_id"], approval_id),
         )
+        if execution.status == "executed":
+            mark_approval_executed(state["tenant_id"], approval_id)
         config: RunnableConfig = {"configurable": {"thread_id": run_id}}
         self.graph.update_state(
             config,

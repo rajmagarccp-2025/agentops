@@ -11,6 +11,12 @@ from platform_api.identity_repository import (
     EnvironmentRepository,
     ProjectRepository,
 )
+from platform_api.rag_service.document_archive import (
+    DocumentArchiveError,
+    DocumentArchiveNotFound,
+    DocumentArchiveTooLarge,
+    get_document_archive,
+)
 from platform_api.rag_service.schemas import (
     DocumentCreate,
     DocumentRecord,
@@ -57,12 +63,23 @@ async def ingest(
         )
     if body.scope == "project":
         body.environment = None
-    return ingest_document(
-        principal.tenant_id,
-        body,
-        project_id=principal.project_id,
-        environment_id=principal.environment_id,
-    )
+    try:
+        return ingest_document(
+            principal.tenant_id,
+            body,
+            project_id=principal.project_id,
+            environment_id=principal.environment_id,
+        )
+    except DocumentArchiveTooLarge as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Document exceeds the 10 MiB archive size limit.",
+        ) from exc
+    except DocumentArchiveError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document archive storage is unavailable or rejected the document.",
+        ) from exc
 
 
 @router.get("/documents", response_model=list[DocumentRecord])
@@ -120,31 +137,68 @@ async def remove_document(
     document = repository.get_document(principal.tenant_id, document_id)
     if not document:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
-    if not delete_document(
-        principal.tenant_id,
-        document_id,
-        environment.project_id,
-        environment.id,
-        db,
-    ):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
-    AuditLogRepository().record_event(
-        db,
-        actor=principal.subject,
-        actor_email=principal.email,
-        action="rag.document.deleted",
-        resource_type="rag_document",
-        resource_id=document_id,
-        organization_id=principal.tenant_id,
-        project_id=principal.project_id,
-        environment_id=environment.id,
-        details={
-            "title": document.title,
-            "scope": document.scope,
-            "production_confirmation": environment.type == "Production",
-        },
-    )
-    db.commit()
+    archive = get_document_archive()
+    archived_content: bytes | None = None
+    if archive:
+        try:
+            archived_content = archive.read_original(principal.tenant_id, document_id)
+        except DocumentArchiveNotFound:
+            pass
+        except DocumentArchiveError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Document archive storage is unavailable; the document was not deleted.",
+            ) from exc
+
+    try:
+        if not delete_document(
+            principal.tenant_id,
+            document_id,
+            environment.project_id,
+            environment.id,
+            db,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+            )
+        AuditLogRepository().record_event(
+            db,
+            actor=principal.subject,
+            actor_email=principal.email,
+            action="rag.document.deleted",
+            resource_type="rag_document",
+            resource_id=document_id,
+            organization_id=principal.tenant_id,
+            project_id=principal.project_id,
+            environment_id=environment.id,
+            details={
+                "title": document.title,
+                "scope": document.scope,
+                "production_confirmation": environment.type == "Production",
+            },
+        )
+        if archive:
+            archive.delete_original(principal.tenant_id, document_id)
+        db.commit()
+    except Exception as operation_error:
+        db.rollback()
+        if archive and archived_content is not None:
+            try:
+                archive.store_original(principal.tenant_id, document_id, archived_content)
+            except Exception as restore_error:
+                operation_error.add_note(
+                    "GCS archive restoration also failed; the document record and archive may "
+                    "be inconsistent."
+                )
+                raise DocumentArchiveError(
+                    "Failed to restore the GCS archive after document deletion failed"
+                ) from restore_error
+        if isinstance(operation_error, DocumentArchiveError):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Document archive storage is unavailable; the document was not deleted.",
+            ) from operation_error
+        raise
 
 
 @router.post("/retrieve", response_model=RetrievalResult)

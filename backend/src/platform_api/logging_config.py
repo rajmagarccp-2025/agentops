@@ -3,6 +3,8 @@ import logging
 import sys
 from datetime import UTC, datetime
 
+from platform_api.observability import redact_sensitive_value
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -10,10 +12,12 @@ class JsonFormatter(logging.Formatter):
             "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": redact_sensitive_value(record.getMessage()),
         }
         if record.exc_info:
-            payload["exception"] = self.formatException(record.exc_info)
+            payload["exception"] = redact_sensitive_value(
+                self.formatException(record.exc_info)
+            )
         return json.dumps(payload)
 
 

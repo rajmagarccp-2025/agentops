@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
     Boolean,
     DateTime,
+    ForeignKey,
     String,
     Text,
     UniqueConstraint,
+    delete,
     func,
     select,
     update,
@@ -89,6 +92,46 @@ class WorkflowWorkerHeartbeat(Base):
     )
 
 
+class WorkflowOutboxRecord(Base):
+    __tablename__ = "workflow_outbox"
+    __table_args__ = (UniqueConstraint("job_id", "delivery_number"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    job_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("workflow_jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    delivery_number: Mapped[int] = mapped_column(nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(default=0, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False, index=True
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    last_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+@dataclass(frozen=True)
+class WorkflowOutboxMessage:
+    id: str
+    job_id: str
+    delivery_number: int
+    tenant_id: str
+    correlation_id: str
+    idempotency_key: str
+
+
 class DurableWorkflowQueue:
     """Database-backed workflow queue with tenant-scoped idempotency and recoverable leases."""
 
@@ -125,11 +168,13 @@ class DurableWorkflowQueue:
                     return existing
 
             active_count = db.scalar(
-                select(func.count())
-                .where(
+                select(func.count()).where(
                     WorkflowJobRecord.status.in_(
-                        [WorkflowJobStatus.PENDING, WorkflowJobStatus.RETRYING,
-                         WorkflowJobStatus.RUNNING]
+                        [
+                            WorkflowJobStatus.PENDING,
+                            WorkflowJobStatus.RETRYING,
+                            WorkflowJobStatus.RUNNING,
+                        ]
                     )
                 )
             )
@@ -156,6 +201,9 @@ class DurableWorkflowQueue:
             )
             db.add(record)
             try:
+                db.flush()
+                if settings.workflow_queue_backend == "pubsub":
+                    self._add_outbox_message(db, record, delivery_number=0)
                 db.commit()
             except IntegrityError:
                 db.rollback()
@@ -174,6 +222,123 @@ class DurableWorkflowQueue:
             db.refresh(record)
             increment("workflow.queue.enqueued")
             return record
+
+    @staticmethod
+    def _add_outbox_message(
+        db: Session,
+        job: WorkflowJobRecord,
+        *,
+        delivery_number: int,
+        available_at: datetime | None = None,
+    ) -> None:
+        db.add(
+            WorkflowOutboxRecord(
+                job_id=job.id,
+                delivery_number=delivery_number,
+                tenant_id=job.tenant_id,
+                correlation_id=job.run_id or job.id,
+                idempotency_key=job.idempotency_key or job.id,
+                available_at=available_at or datetime.now(UTC),
+            )
+        )
+
+    def claim_outbox_messages(
+        self, *, worker_id: str, limit: int = 20, lease_seconds: int = 60
+    ) -> list[WorkflowOutboxMessage]:
+        now = datetime.now(UTC)
+        with SessionLocal() as db:
+            records = list(
+                db.scalars(
+                    select(WorkflowOutboxRecord)
+                    .where(
+                        WorkflowOutboxRecord.available_at <= now,
+                        (WorkflowOutboxRecord.status == "pending")
+                        | (
+                            (WorkflowOutboxRecord.status == "publishing")
+                            & (WorkflowOutboxRecord.lease_expires_at <= now)
+                        ),
+                    )
+                    .order_by(WorkflowOutboxRecord.created_at.asc())
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                ).all()
+            )
+            claimed: list[WorkflowOutboxMessage] = []
+            for record in records:
+                record.status = "publishing"
+                record.attempts += 1
+                record.lease_owner = worker_id
+                record.lease_expires_at = now + timedelta(seconds=lease_seconds)
+                claimed.append(
+                    WorkflowOutboxMessage(
+                        id=record.id,
+                        job_id=record.job_id,
+                        delivery_number=record.delivery_number,
+                        tenant_id=record.tenant_id,
+                        correlation_id=record.correlation_id,
+                        idempotency_key=record.idempotency_key,
+                    )
+                )
+            db.commit()
+            return claimed
+
+    def mark_outbox_published(self, message_id: str, *, worker_id: str) -> bool:
+        with SessionLocal() as db:
+            record = db.get(WorkflowOutboxRecord, message_id)
+            if record is None or record.status != "publishing" or record.lease_owner != worker_id:
+                return False
+            record.status = "published"
+            record.published_at = datetime.now(UTC)
+            record.lease_owner = None
+            record.lease_expires_at = None
+            record.last_error = None
+            db.commit()
+            return True
+
+    def retry_outbox_publish(self, message_id: str, *, worker_id: str, error: str) -> bool:
+        with SessionLocal() as db:
+            record = db.get(WorkflowOutboxRecord, message_id)
+            if record is None or record.status != "publishing" or record.lease_owner != worker_id:
+                return False
+            record.status = "pending"
+            record.available_at = datetime.now(UTC) + timedelta(
+                seconds=min(300, 2 ** min(record.attempts, 8))
+            )
+            record.lease_owner = None
+            record.lease_expires_at = None
+            record.last_error = redact_sensitive_value(error)[:1000]
+            db.commit()
+            increment("workflow.outbox.publish_errors")
+            return True
+
+    def purge_published_outbox(self, *, retention_days: int = 30, batch_size: int = 500) -> int:
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        terminal_statuses = [
+            WorkflowJobStatus.SUCCEEDED,
+            WorkflowJobStatus.FAILED,
+            WorkflowJobStatus.DEAD_LETTER,
+            WorkflowJobStatus.CANCELLED,
+        ]
+        with SessionLocal() as db:
+            candidates = (
+                select(WorkflowOutboxRecord.id)
+                .join(WorkflowJobRecord, WorkflowJobRecord.id == WorkflowOutboxRecord.job_id)
+                .where(
+                    WorkflowOutboxRecord.status == "published",
+                    WorkflowOutboxRecord.published_at < cutoff,
+                    WorkflowJobRecord.status.in_(terminal_statuses),
+                )
+                .order_by(WorkflowOutboxRecord.published_at.asc())
+                .limit(batch_size)
+            )
+            candidate_ids = list(db.scalars(candidates).all())
+            if not candidate_ids:
+                return 0
+            db.execute(
+                delete(WorkflowOutboxRecord).where(WorkflowOutboxRecord.id.in_(candidate_ids))
+            )
+            db.commit()
+            return len(candidate_ids)
 
     def _find_by_idempotency(
         self, db: Session, tenant_id: str, idempotency_key: str
@@ -263,9 +428,8 @@ class DurableWorkflowQueue:
                     status=WorkflowJobStatus.RUNNING,
                     attempts=WorkflowJobRecord.attempts + 1,
                     worker_id=worker_id,
-                    lease_expires_at=now + timedelta(
-                        seconds=get_settings().workflow_job_lease_seconds
-                    ),
+                    lease_expires_at=now
+                    + timedelta(seconds=get_settings().workflow_job_lease_seconds),
                     updated_at=now,
                 )
                 .returning(WorkflowJobRecord.id)
@@ -313,6 +477,13 @@ class DurableWorkflowQueue:
                 delay = min(300, 2 ** min(record.attempts, 8))
                 record.available_at = now + timedelta(seconds=delay)
                 record.error_message = "Worker lease expired; scheduled for retry"
+                if get_settings().workflow_queue_backend == "pubsub":
+                    self._add_outbox_message(
+                        db,
+                        record,
+                        delivery_number=record.attempts,
+                        available_at=record.available_at,
+                    )
                 increment("workflow.queue.lease_expired")
         if expired:
             db.flush()
@@ -338,9 +509,7 @@ class DurableWorkflowQueue:
             increment("workflow.queue.succeeded")
             return record
 
-    def mark_failed(
-        self, job_id: str, *, error: str, retryable: bool = True
-    ) -> WorkflowJobRecord:
+    def mark_failed(self, job_id: str, *, error: str, retryable: bool = True) -> WorkflowJobRecord:
         with SessionLocal() as db:
             record = db.get(WorkflowJobRecord, job_id)
             if record is None:
@@ -357,6 +526,13 @@ class DurableWorkflowQueue:
                 record.available_at = now + timedelta(
                     seconds=min(300, 2 ** min(record.attempts, 8))
                 )
+                if get_settings().workflow_queue_backend == "pubsub":
+                    self._add_outbox_message(
+                        db,
+                        record,
+                        delivery_number=record.attempts,
+                        available_at=record.available_at,
+                    )
                 increment("workflow.queue.retrying")
             else:
                 record.status = WorkflowJobStatus.DEAD_LETTER
@@ -405,19 +581,83 @@ class DurableWorkflowQueue:
             increment("workflow.queue.cancelled")
             return record
 
+    def replay_dead_letter(
+        self,
+        run_id: str,
+        *,
+        tenant_id: str,
+        actor: str,
+        actor_email: str | None,
+    ) -> WorkflowJobRecord | None:
+        with SessionLocal() as db:
+            record = db.scalar(
+                select(WorkflowJobRecord)
+                .where(
+                    WorkflowJobRecord.run_id == run_id,
+                    WorkflowJobRecord.tenant_id == tenant_id,
+                )
+                .with_for_update()
+            )
+            if record is None:
+                return None
+            if record.status != WorkflowJobStatus.DEAD_LETTER:
+                raise ValueError("Only dead-lettered workflow jobs can be replayed")
+
+            now = datetime.now(UTC)
+            record.status = WorkflowJobStatus.PENDING
+            record.attempts = 0
+            record.dead_lettered = False
+            record.available_at = now
+            record.completed_at = None
+            record.worker_id = None
+            record.lease_expires_at = None
+            record.result = None
+            record.updated_at = now
+
+            if get_settings().workflow_queue_backend == "pubsub":
+                previous_delivery = db.scalar(
+                    select(func.max(WorkflowOutboxRecord.delivery_number)).where(
+                        WorkflowOutboxRecord.job_id == record.id
+                    )
+                )
+                self._add_outbox_message(
+                    db,
+                    record,
+                    delivery_number=(previous_delivery or 0) + 1,
+                    available_at=now,
+                )
+
+            from platform_api.identity_repository import AuditLogRepository
+
+            AuditLogRepository().record_event(
+                db,
+                actor=actor,
+                actor_email=actor_email,
+                action="workflow.dead_letter_replayed",
+                resource_type="workflow_job",
+                resource_id=record.id,
+                organization_id=record.tenant_id,
+                details={"run_id": run_id, "job_type": record.job_type},
+            )
+            db.commit()
+            db.refresh(record)
+            increment("workflow.queue.replayed")
+            return record
+
     def list_pending(self, tenant_id: str | None = None) -> list[WorkflowJobRecord]:
         with SessionLocal() as db:
             stmt = select(WorkflowJobRecord).where(
                 WorkflowJobRecord.status.in_(
-                    [WorkflowJobStatus.PENDING, WorkflowJobStatus.RETRYING,
-                     WorkflowJobStatus.RUNNING]
+                    [
+                        WorkflowJobStatus.PENDING,
+                        WorkflowJobStatus.RETRYING,
+                        WorkflowJobStatus.RUNNING,
+                    ]
                 )
             )
             if tenant_id:
                 stmt = stmt.where(WorkflowJobRecord.tenant_id == tenant_id)
-            return list(
-                db.scalars(stmt.order_by(WorkflowJobRecord.created_at.asc())).all()
-            )
+            return list(db.scalars(stmt.order_by(WorkflowJobRecord.created_at.asc())).all())
 
     def summary(self) -> dict[str, int]:
         with SessionLocal() as db:
@@ -426,9 +666,7 @@ class DurableWorkflowQueue:
             )
             return {status: count for status, count in rows}
 
-    def record_worker_heartbeat(
-        self, *, worker_id: str, status: str, active_jobs: int
-    ) -> None:
+    def record_worker_heartbeat(self, *, worker_id: str, status: str, active_jobs: int) -> None:
         now = datetime.now(UTC)
         with SessionLocal() as db:
             record = db.get(WorkflowWorkerHeartbeat, worker_id)
@@ -460,4 +698,69 @@ class DurableWorkflowQueue:
             }
 
 
-workflow_queue = DurableWorkflowQueue()
+class WorkflowQueuePort(Protocol):
+    def enqueue(
+        self,
+        *,
+        tenant_id: str,
+        job_type: str,
+        payload: dict[str, Any],
+        run_id: str | None = None,
+        idempotency_key: str | None = None,
+        max_attempts: int = 3,
+        timeout_seconds: int | None = None,
+    ) -> WorkflowJobRecord: ...
+
+    def claim_next(
+        self,
+        *,
+        worker_id: str,
+        tenant_id: str | None = None,
+        lease_seconds: int | None = None,
+    ) -> WorkflowJobRecord | None: ...
+
+    def claim_by_id(self, job_id: str, *, worker_id: str) -> WorkflowJobRecord | None: ...
+
+    def get(self, job_id: str) -> WorkflowJobRecord | None: ...
+
+    def mark_succeeded(
+        self, job_id: str, *, result: dict[str, Any] | None = None
+    ) -> WorkflowJobRecord: ...
+
+    def mark_failed(
+        self, job_id: str, *, error: str, retryable: bool = True
+    ) -> WorkflowJobRecord: ...
+
+    def cancel_run(
+        self, run_id: str, *, tenant_id: str, reason: str
+    ) -> WorkflowJobRecord | None: ...
+
+    def replay_dead_letter(
+        self,
+        run_id: str,
+        *,
+        tenant_id: str,
+        actor: str,
+        actor_email: str | None,
+    ) -> WorkflowJobRecord | None: ...
+
+    def claim_outbox_messages(
+        self, *, worker_id: str, limit: int = 20, lease_seconds: int = 60
+    ) -> list[WorkflowOutboxMessage]: ...
+
+    def mark_outbox_published(self, message_id: str, *, worker_id: str) -> bool: ...
+
+    def retry_outbox_publish(self, message_id: str, *, worker_id: str, error: str) -> bool: ...
+
+    def purge_published_outbox(self, *, retention_days: int = 30, batch_size: int = 500) -> int: ...
+
+    def record_worker_heartbeat(self, *, worker_id: str, status: str, active_jobs: int) -> None: ...
+
+    def worker_summary(self, *, stale_after_seconds: int = 60) -> dict[str, int]: ...
+
+    def list_pending(self, tenant_id: str | None = None) -> list[WorkflowJobRecord]: ...
+
+    def summary(self) -> dict[str, int]: ...
+
+
+workflow_queue: WorkflowQueuePort = DurableWorkflowQueue()

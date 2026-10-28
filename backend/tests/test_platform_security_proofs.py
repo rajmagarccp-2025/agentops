@@ -169,7 +169,7 @@ def test_proof_6_agents_cannot_directly_call_cloud_apis():
     state = {
         "tenant_id": "tenant-a",
         "subject": "agent-user",
-        "permissions": ["tools:read"],
+        "permissions": ["tools:read", "llm:invoke"],
         "target_resource": "checkout-api",
         "run_id": "run-slice-001",
         "request": "Investigate pod logs",

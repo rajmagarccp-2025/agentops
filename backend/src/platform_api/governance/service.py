@@ -37,6 +37,10 @@ def consume_approval(tenant_id: str, request_id: str) -> ApprovalRequest:
     return approval_repository.consume(tenant_id, request_id)
 
 
+def mark_approval_executed(tenant_id: str, request_id: str) -> ApprovalRequest:
+    return approval_repository.mark_executed(tenant_id, request_id)
+
+
 def reauthorize_execution(
     approval: ApprovalRequest,
     *,

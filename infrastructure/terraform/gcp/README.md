@@ -1,22 +1,61 @@
 # GCP infrastructure with OpenTofu
 
 This module provisions the GKE Autopilot foundation and GCP services for AgentOps.
-The GitHub Actions workflow bootstraps the dedicated OpenTofu state bucket before
-initializing the remote GCS backend.
+The GitHub Actions workflow verifies the existing OpenTofu state bucket before
+initializing the remote GCS backend. It never creates or replaces the state bucket.
 
 ## Required inputs
 
-- `project_id`: the Google Cloud project hosting the platform
-- `database_password`: secure Postgres password for the Cloud SQL instance
+- `project_id`: approved Google Cloud project ID
+- `project_name`: approved resource-name prefix
+- `environment`: approved deployment environment (`dev`, `staging`, or `prod`)
+- `region`: approved Google Cloud region
+- `namespace`: Kubernetes namespace bound to Workload Identity
+- `service_account_name`: GCP runtime service account ID
+- `database_password`: secure Postgres password for the Cloud SQL instance; provide
+  through the protected GitHub environment secret `TF_DATABASE_PASSWORD` as
+  `TF_VAR_database_password`, never through a committed tfvars file.
+
+The deployment workflow requires an approved hostname as the `GCP_DOMAIN`
+GitHub environment variable for configuration checks. The Terraform module
+contains opt-in resources for a global static IP, Cloud Armor, Cloud DNS
+authorization/records, a Google-managed certificate, and a Certificate
+Manager map. These resources are disabled by default. DNS changes require an
+explicit review of the production plan and an existing Cloud DNS zone owned by
+this project.
+
+To include the public edge in a reviewed plan, provide all of the following
+through approved environment variables or a protected CI environment:
+
+- `TF_VAR_enable_public_edge=true`
+- `TF_VAR_enable_public_dns_record=true`
+- `TF_VAR_public_domain=<approved-hostname>`
+- `TF_VAR_dns_managed_zone=<existing-zone-name>`
+
+The DNS flag creates both certificate-authorization records and the hostname A
+record. Do not enable it until ownership, staging, TTL, and rollback have been
+confirmed. The GKE Gateway chart remains disabled until its `gateway.*` values
+are set from the outputs `public_edge_ip_name`,
+`public_edge_cloud_armor_policy_name`, and `public_edge_certificate_map`.
+SQL-injection and XSS WAF rules are initially in preview; the per-IP Cloud
+Armor throttle is enforced. Terraform code and a rendered chart are not proof
+of a live TLS certificate or healthy Gateway.
 
 ## Remote state
 
 OpenTofu stores state in `gs://project-cks-aug2026-agentops-tofu-state` under
 `agentops/prod/default.tfstate`. GCS state locking and bucket object versioning
-are enabled. The deployment workflow creates the bucket once with uniform
-bucket-level access and public access prevention before running `tofu init`.
-Keep access to this bucket restricted: Terraform state contains sensitive
-infrastructure data, including the Cloud SQL password.
+are expected, as are uniform bucket-level access and public access prevention.
+The deployment workflow verifies these settings and fails if the existing
+bucket is missing or does not meet them. It does not create, rename, or replace
+the bucket, and it verifies the expected state object exists before initializing
+the backend. If the bucket or object is missing, stop and investigate; do not
+initialize a new empty state at another location. Keep access to this bucket
+restricted: Terraform state contains sensitive infrastructure data, including
+the Cloud SQL password. Do not change
+the backend bucket or prefix without a reviewed state migration and explicit
+approval; never initialize a new empty backend or use `-backend=false` for
+normal plans or applies.
 
 For local state inspection or drift checks, authenticate with an identity that
 has access to the state bucket, then run:
@@ -31,75 +70,74 @@ tofu plan
 Do not use `tofu init -backend=false` for normal plans or applies; it bypasses
 the shared state.
 
-## GitHub Actions identity bootstrap
+## GitHub Actions identity and configuration
 
-Use a dedicated GitHub deployer service account, separate from the runtime
-`agentops-platform-sa-gcp` service account. Create it and bind the repository's
-Workload Identity principal (project number `964665867515`):
+Use GitHub Workload Identity Federation with a dedicated deployer service
+account, separate from the Kubernetes runtime service account. Do not create or
+use service-account key files. Bind only the intended repository and protected
+branch/environment in the Workload Identity provider condition:
 
 ```bash
-gcloud iam service-accounts create agentops-github-deployer \
-  --project=project-cks-aug2026 \
+gcloud iam service-accounts create "$DEPLOYER_SERVICE_ACCOUNT_NAME" \
+  --project="$APPROVED_PROJECT_ID" \
   --display-name="AgentOps GitHub Actions Deployer"
 
 gcloud iam service-accounts add-iam-policy-binding \
-  agentops-github-deployer@project-cks-aug2026.iam.gserviceaccount.com \
-  --project=project-cks-aug2026 \
+  "$DEPLOYER_SERVICE_ACCOUNT_NAME@$APPROVED_PROJECT_ID.iam.gserviceaccount.com" \
+  --project="$APPROVED_PROJECT_ID" \
   --role=roles/iam.workloadIdentityUser \
-  --member="principalSet://iam.googleapis.com/projects/964665867515/locations/global/workloadIdentityPools/github-actions-pool/attribute.repository/rajmagarccp-2025/agentops"
+  --member="principalSet://iam.googleapis.com/projects/$WORKLOAD_IDENTITY_PROJECT_NUMBER/locations/global/workloadIdentityPools/$WORKLOAD_IDENTITY_POOL/attribute.repository/$GITHUB_REPOSITORY"
 ```
 
-For the initial provisioning workflow, grant the deployer these predefined
-roles (then replace broad service-admin roles with a reviewed custom role when
-you have validated the full resource set):
+The previously documented bootstrap role set contains broad project-level
+permissions. Do not grant that set as a bundle. Review the deployer's actual
+required permissions and resource scope before provisioning:
 
-```bash
-DEPLOYER="serviceAccount:agentops-github-deployer@project-cks-aug2026.iam.gserviceaccount.com"
-for ROLE in \
-  roles/serviceusage.serviceUsageAdmin \
-  roles/storage.admin \
-  roles/compute.networkAdmin \
-  roles/servicenetworking.networksAdmin \
-  roles/container.admin \
-  roles/artifactregistry.admin \
-  roles/cloudsql.admin \
-  roles/redis.admin \
-  roles/iam.serviceAccountAdmin \
-  roles/iam.serviceAccountUser \
-  roles/resourcemanager.projectIamAdmin \
-  roles/pubsub.admin \
-  roles/secretmanager.admin \
-  roles/cloudkms.admin
-do
-  gcloud projects add-iam-policy-binding project-cks-aug2026 \
-    --member="$DEPLOYER" \
-    --role="$ROLE"
-done
-```
+| Existing/documented role | Risk / proposed narrower approach |
+|---|---|
+| `roles/resourcemanager.projectIamAdmin` | Very broad project IAM mutation. Replace with reviewed, resource-scoped bindings and a narrowly scoped custom role only if IAM binding changes are required. |
+| `roles/iam.serviceAccountAdmin` | Can administer service accounts. Limit management to the specific runtime/deployer accounts and required create/update permissions. |
+| `roles/iam.serviceAccountUser` | Allows acting as service accounts. Grant only on the exact service accounts the workflow must impersonate. |
+| `roles/storage.admin` | Broad bucket/object administration. Separate state-bucket access from application resources; use bucket-scoped backend permissions and narrowly scoped artifact-bucket permissions. |
+| `roles/compute.networkAdmin`, `roles/servicenetworking.networksAdmin` | Broad network/peering control. Scope to the platform network and required address/connection operations using a reviewed custom role. |
+| `roles/container.admin` | Broad cluster administration. Restrict to the named cluster and required provisioning/deployment operations. |
+| `roles/artifactregistry.admin` | Broad registry administration. Scope writer/reader access to the named repository. |
+| `roles/cloudsql.admin`, `roles/redis.admin` | Broad database/cache administration. Use resource-scoped permissions/custom roles for only the declared instance operations. |
+| `roles/pubsub.admin`, `roles/secretmanager.admin`, `roles/cloudkms.admin` | Broad service administration. Scope topic, secret, and key access to the named resources and required operations. |
+| `roles/serviceusage.serviceUsageAdmin` | Can enable/disable services. Limit API enablement to the declared API set and provisioning identity. |
 
-Do not grant `roles/owner`. `roles/storage.admin` is needed for the first-run
-state bucket bootstrap and the GCS backend; restrict state bucket access after
-provisioning if you narrow the deployer's project-wide permissions.
+These are recommendations, not IAM changes. No roles are silently removed or
+replaced here; inspect current bindings and validate a least-privilege
+replacement against the deployment before changing access. Do not grant
+`roles/owner`.
 
-Configure these GitHub environment secrets under **Settings → Environments →
-prod**:
+Configure the `prod` GitHub environment with required reviewers and restrict
+deployment branches. Set these **Actions variables** to owner-approved values:
 
-- `GCP_WORKLOAD_IDENTITY_PROVIDER`:
-  `projects/964665867515/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider`
-- `GCP_SERVICE_ACCOUNT`:
-  `agentops-github-deployer@project-cks-aug2026.iam.gserviceaccount.com`
-- `TF_DATABASE_PASSWORD`: strong unique database password
+- `GCP_PROJECT_ID`, `GCP_PROJECT_NAME`, `GCP_REGION`, `GCP_ENVIRONMENT`
+- `GCP_NAMESPACE`, `GCP_RUNTIME_SERVICE_ACCOUNT`, `GCP_DOMAIN`
+- `GCP_CLUSTER_NAME`, `GCP_REPOSITORY`
+
+Set these **Actions secrets** without printing their values:
+
+- `GCP_WORKLOAD_IDENTITY_PROVIDER`: approved Workload Identity provider resource
+- `GCP_SERVICE_ACCOUNT`: dedicated GitHub deployer service-account email
+- `TF_DATABASE_PASSWORD`: unique database password
 - `JWT_DEMO_SECRET`: random secret of at least 32 bytes
-- `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`: values from the
-  production Keycloak client
+- `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`: approved OIDC client
+  configuration
 
-The selected repository and branch must also satisfy the Workload Identity
-provider's attribute condition. The deployer service account is not the
-Kubernetes runtime service account.
+The runtime service account and GitHub deployer are separate identities. The
+workflow runs quality checks on pushes, but infrastructure planning is manual
+and review-only; this workflow contains no infrastructure apply. Application
+deployment is separately opt-in and still depends on a successful plan. Review
+the plan and expected GCP charges before approving any later, separately
+implemented apply path.
 
-The prod configuration creates billable resources, including an Autopilot
-cluster, regional production Cloud SQL, and HA Redis. Review the OpenTofu plan
-and expected GCP charges before the first automatic apply.
+Enable GitHub secret scanning and push protection for the repository before
+using deployment credentials. Review staged changes and workflow logs for
+credential exposure; never place secret values in Terraform arguments, example
+tfvars, generated artifacts, or diagnostic output.
 
 ## Example usage
 
@@ -107,13 +145,17 @@ and expected GCP charges before the first automatic apply.
 cd infrastructure/terraform/gcp
 tofu init
 tofu plan \
-  -var="project_id=project-cks-aug2026" \
-  -var="project_name=agentops-platform" \
-  -var="environment=prod" \
-  -var="region=us-central1" \
-  -var="namespace=prod" \
-  -var="service_account_name=agentops-platform-sa-gcp"
+  -var="project_id=<approved-project-id>" \
+  -var="project_name=<approved-resource-prefix>" \
+  -var="environment=<approved-environment>" \
+  -var="region=<approved-region>" \
+  -var="namespace=<approved-namespace>" \
+  -var="service_account_name=<approved-runtime-service-account>"
 ```
+
+Supply `database_password` through `TF_VAR_database_password` from a protected
+secret; do not put it in a command-line argument or a committed tfvars file.
+Use the existing remote backend shown above.
 
 ## Provisioned resources
 
@@ -124,6 +166,7 @@ tofu plan \
 - GCS application-artifact bucket with uniform access, public access prevention,
   and object versioning
 - Pub/Sub event topic, subscription, and dead-letter topic
+- Dedicated operator subscription for inspecting dead-letter messages
 - Secret Manager secret containers for database, Redis, JWT, and OIDC runtime
   settings (the deploy workflow publishes secret versions)
 - Cloud KMS key for application encryption integrations
@@ -141,13 +184,43 @@ tofu plan \
 - Workload Identity binds the Kubernetes service account to the GCP service account using the `namespace` and `service_account_name` variables.
 - Private networking is enabled for Cloud SQL and Redis so the app runs inside the VPC rather than exposing public database endpoints.
 - Cloud SQL uses the `ALWAYS` activation policy so it is running when OpenTofu manages its database and user. Manually stopping it is drift; the next apply will start it again, and the instance continues to incur compute charges while running.
-- The remote state bucket is bootstrap infrastructure managed by the workflow's
-  idempotent `gcloud storage` step and is intentionally separate from the
-  application artifact bucket managed by OpenTofu.
+- The remote state bucket and state object are pre-existing shared state
+  infrastructure. The workflow verifies them but does not create, update, or
+  manage them; the application artifact bucket is a separate OpenTofu resource.
 - This module provisions the GCP service foundation and IAM only. The current
-  application does not yet contain production GCP adapters for GCS, Pub/Sub,
-  Secret Manager, KMS, or Vertex AI; adding those client integrations and
-  end-to-end adapter tests remains separate application work.
+  application has a GCS adapter for archiving original RAG documents. The
+  document archive bucket is external and is not provisioned by this module.
+  Before deployment, configure the GitHub environment variable
+  `GCS_DOCUMENT_BUCKET` with its bucket name and grant the GKE runtime service
+  account bucket-scoped `roles/storage.objectUser` access. Confirm the
+  Kubernetes-to-Google service account Workload Identity binding and bucket
+  permissions separately; no service-account key files are used. This module
+  provides Secret Manager access only to the six pre-provisioned bootstrap
+  secrets. The backend has a runtime Secret Manager adapter; set
+  `GCP_SECRET_MANAGER_PROJECT_ID` through the GCP Helm deployment. For each
+  application-managed secret, pre-provision its tenant/scope-scoped resource
+  with the expected AgentOps ownership labels and grant the runtime service
+  account `roles/secretmanager.secretAccessor`,
+  `roles/secretmanager.secretVersionAdder`, and
+  `roles/secretmanager.secretVersionManager` on that secret only. The workflow
+  seeds bootstrap values into Secret Manager only when no version exists, then
+  projects Secret Manager's latest versions into the Kubernetes Secret during
+  deployment. It does not install External Secrets Operator or enable automatic
+  rotation. No project-wide Secret Manager administrator role is granted.
+  The separate GitHub deploy identity needs resource-scoped version-list,
+  version-access, and initial-version-add permissions on the six bootstrap
+  secrets for that sync. The workflow worker uses Workload Identity with
+  publisher access to the events topic and subscriber access to the events
+  subscription. The Pub/Sub service agent is granted subscriber access to that
+  subscription and publisher access to the dead-letter topic, as required for
+  dead-letter routing. The runtime identity does not receive access to the
+  operator dead-letter subscription. The workflow deploy step derives topic and
+  subscription IDs from `GCP_PROJECT_NAME` and `GCP_ENVIRONMENT`; these must
+  match the Terraform resource prefix and environment. The backend uses a
+  transactional PostgreSQL outbox and the database remains authoritative.
+  Pub/Sub delivery, IAM, and DLQ routing still require verification in an
+  approved non-production GCP project before production rollout. KMS and Vertex
+  AI runtime adapters remain incomplete.
 - Terraform does not currently provision Keycloak, Kong Gateway, public DNS,
   or TLS certificates. The GCP Helm values intentionally leave ingress disabled;
   production DNS, the approved gateway, certificates, and Keycloak realm/client

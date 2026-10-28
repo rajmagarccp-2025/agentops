@@ -75,3 +75,15 @@ def test_telemetry_is_tenant_scoped() -> None:
         headers=auth_header("llm:read", tenant_id="other-llmops-tenant"),
     )
     assert other.json() == []
+
+
+def test_registered_model_gateway_requires_invoke_permission() -> None:
+    response = client.post(
+        "/v1/chat/completions",
+        headers=auth_header("llm:read"),
+        json={
+            "model": "unresolved-model",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+    )
+    assert response.status_code == 403

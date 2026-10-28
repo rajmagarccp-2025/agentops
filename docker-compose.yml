@@ -178,7 +178,7 @@ services:
       - platform-network
 
   kong:
-    image: kong:3.4
+    image: kong:3.9.1
     restart: unless-stopped
     environment:
       KONG_DATABASE: "off"
@@ -192,8 +192,8 @@ services:
     volumes:
       - ./deployment/kong/kong.yml:/etc/kong/kong.yml:ro
     ports:
-      - "8002:8000"
-      - "8003:8001"
+      - "127.0.0.1:8002:8000"
+      - "127.0.0.1:8003:8001"
     depends_on:
       api:
         condition: service_healthy

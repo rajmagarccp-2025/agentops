@@ -22,7 +22,7 @@ jobs:
           pip install -e ./backend
           pip install pytest pytest-asyncio ruff mypy
       - name: Lint Code
-        run: ruff check backend/src
+        run: ruff check backend/src backend/tests/test_opa_client.py backend/tests/test_observability.py
       - name: Run Pytest Suite
         run: pytest backend/tests
 
@@ -61,6 +61,13 @@ jobs:
       - name: Validate GCP Helm Templates
         run: |
           helm template test-gcp deployment/helm/platform -f deployment/helm/platform/values-gcp.yaml
+          helm template test-gcp-gateway deployment/helm/platform \
+            -f deployment/helm/platform/values-gcp.yaml \
+            --set gateway.enabled=true \
+            --set gateway.domain=api.example.com \
+            --set gateway.staticAddressName=test-public-edge \
+            --set gateway.certificateMap=projects/test/locations/global/certificateMaps/test \
+            --set gateway.cloudArmorPolicy=test-edge-policy
       - name: Validate AWS Helm Templates
         run: |
           helm template test-aws deployment/helm/platform -f deployment/helm/platform/values-aws.yaml
@@ -71,9 +78,38 @@ jobs:
         run: |
           helm template test-ocp deployment/helm/platform -f deployment/helm/platform/values-openshift.yaml
 
+  policy-validation:
+    name: OPA Policy Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check packaged policy matches tested policy
+        run: cmp policy/agentops/authz.rego deployment/helm/platform/policy/agentops/authz.rego
+      - name: Format, check, and test Rego with pinned OPA
+        run: |
+          docker run --rm -v "$PWD/policy:/policy" openpolicyagent/opa:1.4.2 fmt --fail /policy
+          docker run --rm -v "$PWD/policy:/policy" openpolicyagent/opa:1.4.2 check --strict /policy
+          docker run --rm -v "$PWD/policy:/policy" openpolicyagent/opa:1.4.2 test -v /policy
+
+  terraform-validation:
+    name: OpenTofu Format & Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.8.8
+      - name: Check Terraform formatting
+        run: tofu fmt -check -recursive infrastructure/terraform/gcp
+      - name: Validate Terraform configuration without touching remote state
+        working-directory: infrastructure/terraform/gcp
+        run: |
+          tofu init -backend=false -input=false
+          tofu validate
+
   docker-build-and-scan:
     name: Container Build & Vulnerability Scan
-    needs: [backend-test, frontend-test, helm-validation]
+    needs: [backend-test, frontend-test, helm-validation, policy-validation, terraform-validation]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -88,3 +124,27 @@ jobs:
       - name: Build Frontend Container Image
         run: |
           docker build -t platform-frontend:${{ github.sha }} -f docker/frontend.Dockerfile .
+      - name: Scan API image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: platform-api:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Scan worker image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: platform-worker:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: platform-frontend:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"

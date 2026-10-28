@@ -8,32 +8,63 @@ data "google_project" "current" {
 }
 
 variable "project_id" {
-  type = string
+  description = "Approved Google Cloud project ID for this deployment."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.project_id)) > 0
+    error_message = "project_id must be set to an approved Google Cloud project."
+  }
 }
 
 variable "project_name" {
-  type    = string
-  default = "agentic-platform"
+  description = "Resource-name prefix approved for this deployment."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{0,29}$", var.project_name))
+    error_message = "project_name must start with a lowercase letter and contain only lowercase letters, digits, or hyphens (maximum 30 characters)."
+  }
 }
 
 variable "environment" {
-  type    = string
-  default = "dev"
+  description = "Deployment environment, such as dev, staging, or prod."
+  type        = string
+
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "environment must be dev, staging, or prod."
+  }
 }
 
 variable "namespace" {
-  type    = string
-  default = "platform-prod"
+  description = "Kubernetes namespace bound to the workload identity."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", var.namespace)) && length(var.namespace) <= 63
+    error_message = "namespace must be a valid Kubernetes DNS label of at most 63 characters."
+  }
 }
 
 variable "service_account_name" {
-  type    = string
-  default = "platform-sa-gcp"
+  description = "GCP runtime service account bound to the Kubernetes workload identity."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]$", var.service_account_name))
+    error_message = "service_account_name must be a valid GCP service account ID of 6 to 30 lowercase letters, digits, or hyphens."
+  }
 }
 
 variable "region" {
-  type    = string
-  default = "us-central1"
+  description = "Approved Google Cloud region for this deployment."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.region)) > 0
+    error_message = "region must be set to an approved Google Cloud region."
+  }
 }
 
 variable "cluster_release_channel" {
@@ -44,6 +75,44 @@ variable "cluster_release_channel" {
 variable "database_password" {
   type      = string
   sensitive = true
+}
+
+variable "enable_public_edge" {
+  description = "Reserve public edge resources (global IP and Cloud Armor). Does not create DNS records."
+  type        = bool
+  default     = false
+}
+
+variable "enable_public_dns_record" {
+  description = "Create an A record in the explicitly named existing DNS zone. Requires review before apply."
+  type        = bool
+  default     = false
+
+  validation {
+    condition = !var.enable_public_dns_record || (
+      var.enable_public_edge && var.public_domain != "" && var.dns_managed_zone != ""
+    )
+    error_message = "Public DNS requires the public edge, a public domain, and an existing managed zone name."
+  }
+}
+
+variable "public_domain" {
+  description = "Owned public hostname for the gateway, without a trailing dot."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = var.public_domain == "" || can(
+      regex("^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$", var.public_domain)
+    )
+    error_message = "public_domain must be a fully qualified lowercase DNS hostname."
+  }
+}
+
+variable "dns_managed_zone" {
+  description = "Name of an existing Cloud DNS managed zone owned by this project."
+  type        = string
+  default     = ""
 }
 
 resource "google_project_service" "required" {
@@ -66,6 +135,30 @@ resource "google_project_service" "required" {
   ])
 
   service            = each.value
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "public_edge" {
+  count   = var.enable_public_edge ? 1 : 0
+  project = var.project_id
+  service = "networkservices.googleapis.com"
+
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "public_dns" {
+  count   = var.enable_public_dns_record ? 1 : 0
+  project = var.project_id
+  service = "dns.googleapis.com"
+
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "certificate_manager" {
+  count   = var.enable_public_dns_record ? 1 : 0
+  project = var.project_id
+  service = "certificatemanager.googleapis.com"
+
   disable_on_destroy = false
 }
 
@@ -93,6 +186,150 @@ resource "google_compute_subnetwork" "platform" {
   }
 
   depends_on = [google_project_service.required]
+}
+
+resource "google_compute_global_address" "public_edge" {
+  count        = var.enable_public_edge ? 1 : 0
+  name         = "${var.project_name}-${var.environment}-public-edge"
+  address_type = "EXTERNAL"
+  ip_version   = "IPV4"
+
+  depends_on = [google_project_service.public_edge]
+}
+
+resource "google_compute_security_policy" "public_edge" {
+  count       = var.enable_public_edge ? 1 : 0
+  name        = "${var.project_name}-${var.environment}-edge"
+  description = "Cloud Armor baseline for the AgentOps Kong Gateway."
+
+  rule {
+    action      = "throttle"
+    priority    = 1000
+    description = "Apply a conservative per-client-IP request rate limit."
+
+    match {
+      versioned_expr = "SRC_IPS_V1"
+      config {
+        src_ip_ranges = ["*"]
+      }
+    }
+
+    rate_limit_options {
+      conform_action = "allow"
+      exceed_action  = "deny(429)"
+      enforce_on_key = "IP"
+
+      rate_limit_threshold {
+        count        = 300
+        interval_sec = 60
+      }
+    }
+  }
+
+  rule {
+    action      = "deny(403)"
+    priority    = 1100
+    description = "Preview SQL injection WAF signatures before enforcement."
+    preview     = true
+
+    match {
+      expr {
+        expression = "evaluatePreconfiguredWaf('sqli-v33-stable')"
+      }
+    }
+  }
+
+  rule {
+    action      = "deny(403)"
+    priority    = 1200
+    description = "Preview cross-site scripting WAF signatures before enforcement."
+    preview     = true
+
+    match {
+      expr {
+        expression = "evaluatePreconfiguredWaf('xss-v33-stable')"
+      }
+    }
+  }
+
+  rule {
+    action   = "allow"
+    priority = 2147483647
+    match {
+      versioned_expr = "SRC_IPS_V1"
+      config {
+        src_ip_ranges = ["*"]
+      }
+    }
+  }
+
+  depends_on = [google_project_service.public_edge]
+}
+
+data "google_dns_managed_zone" "public_edge" {
+  count = var.enable_public_dns_record ? 1 : 0
+  name  = var.dns_managed_zone
+
+  depends_on = [google_project_service.public_dns]
+}
+
+resource "google_dns_record_set" "public_edge" {
+  count        = var.enable_public_dns_record ? 1 : 0
+  name         = "${var.public_domain}."
+  managed_zone = data.google_dns_managed_zone.public_edge[0].name
+  type         = "A"
+  ttl          = 300
+  rrdatas      = [google_compute_global_address.public_edge[0].address]
+
+  depends_on = [google_project_service.public_dns]
+}
+
+resource "google_certificate_manager_dns_authorization" "public_edge" {
+  count       = var.enable_public_dns_record ? 1 : 0
+  name        = "${var.project_name}-${var.environment}-authorization"
+  description = "DNS authorization for the AgentOps public gateway certificate."
+  domain      = var.public_domain
+
+  depends_on = [google_project_service.certificate_manager]
+}
+
+resource "google_dns_record_set" "certificate_authorization" {
+  count        = var.enable_public_dns_record ? 1 : 0
+  name         = google_certificate_manager_dns_authorization.public_edge[0].dns_resource_record[0].name
+  managed_zone = data.google_dns_managed_zone.public_edge[0].name
+  type         = google_certificate_manager_dns_authorization.public_edge[0].dns_resource_record[0].type
+  ttl          = 300
+  rrdatas      = [google_certificate_manager_dns_authorization.public_edge[0].dns_resource_record[0].data]
+
+  depends_on = [google_project_service.public_dns]
+}
+
+resource "google_certificate_manager_certificate" "public_edge" {
+  count       = var.enable_public_dns_record ? 1 : 0
+  name        = "${var.project_name}-${var.environment}-certificate"
+  description = "Google-managed TLS certificate for the AgentOps public gateway."
+
+  managed {
+    domains            = [var.public_domain]
+    dns_authorizations = [google_certificate_manager_dns_authorization.public_edge[0].id]
+  }
+}
+
+resource "google_certificate_manager_certificate_map" "public_edge" {
+  count       = var.enable_public_dns_record ? 1 : 0
+  name        = "${var.project_name}-${var.environment}-certificate-map"
+  description = "Certificate map for the AgentOps public gateway."
+
+  depends_on = [google_project_service.certificate_manager]
+}
+
+resource "google_certificate_manager_certificate_map_entry" "public_edge" {
+  count        = var.enable_public_dns_record ? 1 : 0
+  name         = "${var.project_name}-${var.environment}-certificate"
+  description  = "Hostname entry for the AgentOps public gateway certificate."
+  map          = google_certificate_manager_certificate_map.public_edge[0].id
+  hostname     = var.public_domain
+  certificates = [google_certificate_manager_certificate.public_edge[0].id]
 }
 
 resource "google_compute_global_address" "private_ip_alloc" {
@@ -191,10 +428,25 @@ resource "google_pubsub_subscription" "events" {
   ack_deadline_seconds       = 30
   message_retention_duration = "604800s"
 
+  retry_policy {
+    minimum_backoff = "10s"
+    maximum_backoff = "300s"
+  }
+
   dead_letter_policy {
     dead_letter_topic     = google_pubsub_topic.dead_letter.id
     max_delivery_attempts = 5
   }
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_pubsub_subscription" "dead_letter" {
+  name  = "${var.project_name}-${var.environment}-events-dlq"
+  topic = google_pubsub_topic.dead_letter.id
+
+  ack_deadline_seconds       = 60
+  message_retention_duration = "604800s"
 
   depends_on = [google_project_service.required]
 }
@@ -217,6 +469,7 @@ resource "google_kms_crypto_key" "platform" {
 }
 
 locals {
+  pubsub_service_agent_email = "service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
   platform_secret_ids = toset([
     "agentops-database-url",
     "agentops-redis-url",
@@ -270,6 +523,18 @@ resource "google_pubsub_subscription_iam_member" "platform_events_subscriber" {
   subscription = google_pubsub_subscription.events.name
   role         = "roles/pubsub.subscriber"
   member       = "serviceAccount:${google_service_account.platform.email}"
+}
+
+resource "google_pubsub_subscription_iam_member" "pubsub_service_agent_events_subscriber" {
+  subscription = google_pubsub_subscription.events.name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:${local.pubsub_service_agent_email}"
+}
+
+resource "google_pubsub_topic_iam_member" "pubsub_service_agent_dead_letter_publisher" {
+  topic  = google_pubsub_topic.dead_letter.name
+  role   = "roles/pubsub.publisher"
+  member = "serviceAccount:${local.pubsub_service_agent_email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "platform_secret_accessor" {
@@ -384,12 +649,40 @@ output "database_private_ip" {
   value = google_sql_database_instance.platform.private_ip_address
 }
 
+output "public_edge_ip" {
+  description = "Reserved global address for the opt-in Gateway API edge."
+  value       = try(google_compute_global_address.public_edge[0].address, null)
+}
+
+output "public_edge_ip_name" {
+  description = "Global address resource name to reference from the GKE Gateway."
+  value       = try(google_compute_global_address.public_edge[0].name, null)
+}
+
+output "public_edge_cloud_armor_policy_name" {
+  description = "Cloud Armor policy name to reference from the Kong GCPBackendPolicy."
+  value       = try(google_compute_security_policy.public_edge[0].name, null)
+}
+
+output "public_edge_certificate_map" {
+  description = "Certificate Manager map resource ID for the opt-in GKE Gateway."
+  value       = try(google_certificate_manager_certificate_map.public_edge[0].id, null)
+}
+
 output "artifact_bucket_name" {
   value = google_storage_bucket.artifacts.name
 }
 
 output "pubsub_topic_name" {
   value = google_pubsub_topic.events.name
+}
+
+output "pubsub_subscription_name" {
+  value = google_pubsub_subscription.events.name
+}
+
+output "pubsub_dead_letter_subscription_name" {
+  value = google_pubsub_subscription.dead_letter.name
 }
 
 output "kms_key_name" {

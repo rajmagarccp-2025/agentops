@@ -34,7 +34,7 @@ spec:
           imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext.container | nindent 12 }}
-          command: ["python", "-m", "platform_api.main"]
+          command: ["python", "-m", "platform_api.worker"]
           envFrom:
             - configMapRef:
                 name: {{ include "platform.fullname" . }}-config

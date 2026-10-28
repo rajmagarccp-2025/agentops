@@ -3,11 +3,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from platform_api.database import get_db
-from platform_api.redis_client import get_redis
+from platform_api.observability import increment
+from platform_api.redis_client import get_redis, record_redis_server_metrics
 from platform_api.workflow_queue import workflow_queue
 
 router = APIRouter(prefix="/health", tags=["health"])
@@ -33,6 +35,10 @@ async def readiness(
     try:
         await redis.ping()
         dependencies["redis"] = "ok"
+        try:
+            record_redis_server_metrics(await redis.info())
+        except (RedisError, AttributeError):
+            increment("redis.server.metrics_errors")
     except Exception:
         dependencies["redis"] = "unavailable"
 

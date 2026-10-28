@@ -4,7 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from platform_api.mcp.gateway import tool_registry
-from platform_api.mcp.registry import ToolAuthorizationError, ToolNotFoundError
+from platform_api.mcp.registry import (
+    ToolAuthorizationError,
+    ToolNotFoundError,
+    ToolPolicyUnavailableError,
+)
 from platform_api.mcp.types import ToolCategory, ToolRequest, ToolRisk
 from platform_api.security import Principal, get_current_principal, require_permission
 
@@ -85,6 +89,11 @@ async def execute_tool(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Missing tool permission: {exc.args[0]}",
+        ) from exc
+    except ToolPolicyUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Policy decision service is unavailable; mutation was not executed.",
         ) from exc
 
     result = execution.result.data if execution.result is not None else None

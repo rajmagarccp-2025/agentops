@@ -22,6 +22,68 @@ ingress:
 config:
   database:
     sslMode: require
+  redis:
+    cacheConnections: 32
+
+rag:
+  documentStorageBackend: gcs
+  gcsDocumentBucket: ""
+  maxDocumentBytes: "10485760"
+
+secretManager:
+  projectId: ""
+
+secretCache:
+  ttlSeconds: 300
+  maxValueBytes: 65536
+
+workflowQueue:
+  backend: pubsub
+  projectId: ""
+  topicId: ""
+  subscriptionId: ""
+  pollBatchSize: 10
+  ackExtensionSeconds: 60
+  outboxRetentionDays: 30
+
+llm:
+  provider: vertex
+  maxInputTokens: 32768
+  maxOutputTokens: 8192
+  maxTotalTokens: 40960
+  tenantRequestsPerMinute: 60
+  tenantDailyTokenBudget: 100000
+  vertexProjectId: ""
+  vertexLocation: us-central1
+  reasoningModel: gemini-2.5-flash
+  fastModel: gemini-2.5-flash-lite
+  longContextModel: gemini-2.5-pro
+  structuredModel: gemini-2.5-flash
+  timeoutSeconds: "30"
+  vertexMaxOutputTokens: 8192
+  maxConcurrentRequests: 16
+  embeddingProvider: vertex
+  embeddingModel: text-embedding-005
+  embeddingDimensions: 768
+
+opa:
+  enabled: true
+  timeoutSeconds: "1"
+
+telemetry:
+  enabled: true
 
 serviceMonitor:
   enabled: false
+
+kong:
+  enabled: true
+  image:
+    repository: kong
+    tag: "3.9.1"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  rateLimitPerMinute: 60
+  maxRequestSizeMegabytes: 12
+  service:
+    port: 80

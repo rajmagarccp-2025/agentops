@@ -95,6 +95,14 @@ class ApprovalRepository:
         self._requests[tenant_id][request_id] = updated
         return updated
 
+    def mark_executed(self, tenant_id: str, request_id: str) -> ApprovalRequest:
+        request = self.get(tenant_id, request_id)
+        if request.status != ApprovalStatus.APPROVED or not request.consumed:
+            raise ValueError("Only a consumed, approved request can be marked executed")
+        updated = request.model_copy(update={"status": ApprovalStatus.EXECUTED})
+        self._requests[tenant_id][request_id] = updated
+        return updated
+
 
 class SqlAlchemyApprovalRepository(ApprovalRepository):
     def create(
@@ -112,7 +120,11 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
             expires_at=expiration(payload.expires_in_minutes),
         )
         with SessionLocal() as session:
-            session.add(ApprovalRequestModel(**request.model_dump()))
+            session.add(
+                ApprovalRequestModel(
+                    **request.model_dump(exclude={"single_use"})
+                )
+            )
             session.commit()
         return request
 
@@ -161,6 +173,39 @@ class SqlAlchemyApprovalRepository(ApprovalRepository):
         )
         return self._save_decision(updated)
 
+    def consume(self, tenant_id: str, request_id: str) -> ApprovalRequest:
+        with SessionLocal() as session:
+            model = session.scalar(
+                select(ApprovalRequestModel)
+                .where(
+                    ApprovalRequestModel.tenant_id == tenant_id,
+                    ApprovalRequestModel.id == request_id,
+                )
+                .with_for_update()
+            )
+            if model is None:
+                raise KeyError(request_id)
+            if model.status != ApprovalStatus.APPROVED.value:
+                raise ValueError(
+                    f"Approval request status is {model.status}, expected APPROVED"
+                )
+            if model.consumed:
+                raise ValueError("Approval request replay detected: already consumed")
+            if model.expires_at <= datetime.now(UTC):
+                raise ValueError("Approval request has expired")
+            model.consumed = True
+            model.consumed_at = datetime.now(UTC)
+            session.commit()
+            return _to_approval(model)
+
+    def mark_executed(self, tenant_id: str, request_id: str) -> ApprovalRequest:
+        request = self.get(tenant_id, request_id)
+        if request.status != ApprovalStatus.APPROVED or not request.consumed:
+            raise ValueError("Only a consumed, approved request can be marked executed")
+        return self._save_decision(
+            request.model_copy(update={"status": ApprovalStatus.EXECUTED})
+        )
+
     def _save_decision(self, request: ApprovalRequest) -> ApprovalRequest:
         with SessionLocal() as session:
             model = session.get(ApprovalRequestModel, request.id)
@@ -192,6 +237,8 @@ def _to_approval(model: ApprovalRequestModel) -> ApprovalRequest:
         created_at=model.created_at,
         expires_at=model.expires_at,
         decided_at=model.decided_at,
+        consumed=model.consumed,
+        consumed_at=model.consumed_at,
     )
 
 

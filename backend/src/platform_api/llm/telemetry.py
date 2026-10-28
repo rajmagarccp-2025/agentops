@@ -44,6 +44,7 @@ def create_event(
     latency_ms: float,
     retries: int,
     fallback_used: bool,
+    error: str | None = None,
 ) -> LLMEvent:
     return LLMEvent(
         request_id=request_id,
@@ -59,4 +60,5 @@ def create_event(
         retries=retries,
         fallback_used=fallback_used,
         created_at=datetime.now(UTC),
+        error=error,
     )

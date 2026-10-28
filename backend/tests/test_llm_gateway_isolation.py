@@ -26,7 +26,9 @@ def test_agent_cannot_import_provider_sdks_directly() -> None:
 
 def test_llm_gateway_logical_aliases_and_telemetry() -> None:
     gateway = default_gateway()
-    principal = Principal("user-1", "tenant-llm-test", frozenset(), frozenset())
+    principal = Principal(
+        "user-1", "tenant-llm-test", frozenset(), frozenset({"llm:invoke"})
+    )
 
     req = LLMRequest(
         task="testing_alias",
@@ -45,7 +47,9 @@ def test_llm_gateway_logical_aliases_and_telemetry() -> None:
 
 def test_llm_gateway_structured_output_validation() -> None:
     gateway = default_gateway()
-    principal = Principal("user-1", "tenant-llm-test", frozenset(), frozenset())
+    principal = Principal(
+        "user-1", "tenant-llm-test", frozenset(), frozenset({"llm:invoke"})
+    )
 
     req = LLMRequest(
         task="testing_structured",

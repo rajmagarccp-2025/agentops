@@ -2,10 +2,11 @@ from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import Float, cast, select
 from sqlalchemy.orm import Session
 
-from platform_api.database import SessionLocal
+from platform_api.database import SessionLocal, engine
+from platform_api.rag_service.embedding import cosine_similarity
 from platform_api.rag_service.models import (
     DocumentChunkModel,
     DocumentRecordModel,
@@ -174,6 +175,37 @@ class InMemoryRagRepository:
             chunk for chunk in self.chunks.values() if chunk.document_id in accessible_documents
         ]
 
+    def search_similar_chunks(
+        self,
+        query_embedding: list[float],
+        tenant_id: str,
+        roles: frozenset[str],
+        limit: int,
+        document_type: DocumentType | None = None,
+        service: str | None = None,
+        environment: str | None = None,
+        project_id: str | None = None,
+        environment_id: str | None = None,
+        tags: list[str] | None = None,
+        include_stale: bool = True,
+    ) -> list[tuple[float, DocumentChunk]]:
+        chunks = self.accessible_chunks(
+            tenant_id,
+            roles,
+            document_type,
+            service,
+            environment,
+            project_id,
+            environment_id,
+            tags,
+            include_stale,
+        )
+        return sorted(
+            ((cosine_similarity(query_embedding, chunk.embedding), chunk) for chunk in chunks),
+            key=lambda item: item[0],
+            reverse=True,
+        )[:limit]
+
     def update_document_scope(
         self,
         tenant_id: str,
@@ -260,6 +292,10 @@ class SqlAlchemyRagRepository(InMemoryRagRepository):
                         content=chunk.content,
                         metadata_json=chunk.metadata,
                         embedding=chunk.embedding,
+                        embedding_provider=chunk.embedding_provider,
+                        embedding_model=chunk.embedding_model,
+                        embedding_version=chunk.embedding_version,
+                        embedding_dimensions=chunk.embedding_dimensions,
                     )
                     for chunk in chunks
                 ]
@@ -386,17 +422,116 @@ class SqlAlchemyRagRepository(InMemoryRagRepository):
         tags: list[str] | None = None,
         include_stale: bool = True,
     ) -> list[DocumentChunk]:
+        allowed_ids = self._accessible_document_ids(
+            tenant_id,
+            roles,
+            document_type,
+            service,
+            environment,
+            project_id,
+            environment_id,
+            tags,
+            include_stale,
+        )
+
+        if not allowed_ids:
+            return []
+        with SessionLocal() as session:
+            models = session.scalars(
+                select(DocumentChunkModel).where(
+                    DocumentChunkModel.tenant_id == tenant_id,
+                    DocumentChunkModel.document_id.in_(allowed_ids),
+                    DocumentChunkModel.embedding.is_not(None),
+                )
+            ).all()
+            return [_to_chunk(model) for model in models]
+
+    def search_similar_chunks(
+        self,
+        query_embedding: list[float],
+        tenant_id: str,
+        roles: frozenset[str],
+        limit: int,
+        document_type: DocumentType | None = None,
+        service: str | None = None,
+        environment: str | None = None,
+        project_id: str | None = None,
+        environment_id: str | None = None,
+        tags: list[str] | None = None,
+        include_stale: bool = True,
+    ) -> list[tuple[float, DocumentChunk]]:
+        allowed_ids = self._accessible_document_ids(
+            tenant_id,
+            roles,
+            document_type,
+            service,
+            environment,
+            project_id,
+            environment_id,
+            tags,
+            include_stale,
+        )
+        if not allowed_ids:
+            return []
+        if engine.dialect.name != "postgresql":
+            chunks = self.accessible_chunks(
+                tenant_id,
+                roles,
+                document_type,
+                service,
+                environment,
+                project_id,
+                environment_id,
+                tags,
+                include_stale,
+            )
+            return sorted(
+                (
+                    (cosine_similarity(query_embedding, chunk.embedding), chunk)
+                    for chunk in chunks
+                ),
+                key=lambda item: item[0],
+                reverse=True,
+            )[:limit]
+
+        with SessionLocal() as session:
+            distance = DocumentChunkModel.embedding.cosine_distance(query_embedding)
+            similarity = cast(1.0 - distance, Float)
+            rows = session.execute(
+                select(DocumentChunkModel, similarity.label("score"))
+                .where(
+                    DocumentChunkModel.tenant_id == tenant_id,
+                    DocumentChunkModel.document_id.in_(allowed_ids),
+                    DocumentChunkModel.embedding.is_not(None),
+                )
+                .order_by(distance)
+                .limit(limit)
+            ).all()
+            return [(float(score), _to_chunk(model)) for model, score in rows]
+
+    def _accessible_document_ids(
+        self,
+        tenant_id: str,
+        roles: frozenset[str],
+        document_type: DocumentType | None,
+        service: str | None,
+        environment: str | None,
+        project_id: str | None,
+        environment_id: str | None,
+        tags: list[str] | None,
+        include_stale: bool,
+    ) -> set[str]:
         documents = self.list_documents(tenant_id, project_id, environment_id)
-        allowed_ids = set()
+        allowed_ids: set[str] = set()
+        user_roles = {role.lower() for role in roles}
         for doc in documents:
-            doc_roles = {r.lower() for r in doc.allowed_roles}
-            user_roles = {r.lower() for r in roles}
+            doc_roles = {role.lower() for role in doc.allowed_roles}
             if (
                 doc.allowed_roles
                 and "platform-admin" not in user_roles
                 and "admin" not in user_roles
                 and "owner" not in user_roles
-                and not bool(doc_roles.intersection(user_roles))
+                and not doc_roles.intersection(user_roles)
             ):
                 continue
             if document_type and doc.document_type != document_type:
@@ -410,17 +545,7 @@ class SqlAlchemyRagRepository(InMemoryRagRepository):
             if doc.is_stale and not include_stale:
                 continue
             allowed_ids.add(doc.id)
-
-        if not allowed_ids:
-            return []
-        with SessionLocal() as session:
-            models = session.scalars(
-                select(DocumentChunkModel).where(
-                    DocumentChunkModel.tenant_id == tenant_id,
-                    DocumentChunkModel.document_id.in_(allowed_ids),
-                )
-            ).all()
-            return [_to_chunk(model) for model in models]
+        return allowed_ids
 
     def update_document_scope(
         self,
@@ -514,6 +639,8 @@ def _to_document(model: DocumentRecordModel) -> DocumentRecord:
 
 
 def _to_chunk(model: DocumentChunkModel) -> DocumentChunk:
+    if model.embedding is None:
+        raise ValueError(f"Document chunk {model.id} has no active embedding")
     return DocumentChunk(
         id=model.id,
         document_id=model.document_id,
@@ -522,6 +649,10 @@ def _to_chunk(model: DocumentChunkModel) -> DocumentChunk:
         content=model.content,
         metadata=model.metadata_json,
         embedding=model.embedding,
+        embedding_provider=model.embedding_provider,
+        embedding_model=model.embedding_model,
+        embedding_version=model.embedding_version,
+        embedding_dimensions=model.embedding_dimensions,
     )
 
 

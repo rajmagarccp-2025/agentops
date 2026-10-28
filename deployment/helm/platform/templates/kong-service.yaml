@@ -1,0 +1,20 @@
+{{- if .Values.kong.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "platform.fullname" . }}-gateway
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: kong
+spec:
+  type: ClusterIP
+  ports:
+    - name: proxy
+      port: {{ .Values.kong.service.port }}
+      targetPort: proxy
+      protocol: TCP
+  selector:
+    {{- include "platform.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: kong
+{{- end }}

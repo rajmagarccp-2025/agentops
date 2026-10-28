@@ -1,5 +1,6 @@
 import time
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -40,7 +41,7 @@ def test_discovery_run_routes_through_mcp_and_checkpoints_state(
 ) -> None:
     response = client.post(
         "/api/v1/agent-runs",
-        headers=auth_header("agents:run", "tools:read"),
+        headers=auth_header("agents:run", "tools:read", "llm:invoke"),
         json={"request": "Discover production resources", "request_type": "discovery"},
     )
 
@@ -169,6 +170,57 @@ def test_agent_run_requires_permission() -> None:
     assert response.status_code == 403
 
 
+def test_workflow_replay_requires_permission_and_is_tenant_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from platform_api.api import agents as agents_api
+
+    run_id = "run-replay-test"
+    tenant_id = "tenant-replay-test"
+    state = {
+        "tenant_id": tenant_id,
+        "workspace_project_id": "",
+        "workspace_environment_id": "",
+    }
+    replayed_job = SimpleNamespace(
+        id="job-replay-test",
+        status="pending",
+        attempts=0,
+    )
+    monkeypatch.setattr(agents_api.agent_runtime, "get", lambda requested_run_id: state)
+    monkeypatch.setattr(
+        agents_api.workflow_queue,
+        "replay_dead_letter",
+        lambda requested_run_id, **kwargs: replayed_job,
+    )
+
+    denied_token = issue_demo_token(
+        tenant_id=tenant_id,
+        permissions=("agents:run",),
+    )
+    denied = client.post(
+        f"/api/v1/agent-runs/{run_id}/replay",
+        headers={"Authorization": f"Bearer {denied_token}"},
+    )
+    assert denied.status_code == 403
+
+    allowed_token = issue_demo_token(
+        tenant_id=tenant_id,
+        permissions=("workflow:replay",),
+    )
+    accepted = client.post(
+        f"/api/v1/agent-runs/{run_id}/replay",
+        headers={"Authorization": f"Bearer {allowed_token}"},
+    )
+    assert accepted.status_code == 202
+    assert accepted.json() == {
+        "run_id": run_id,
+        "job_id": "job-replay-test",
+        "status": "pending",
+        "attempts": 0,
+    }
+
+
 def test_specialist_agent_routes() -> None:
     routes = ["sre", "change", "finops", "security", "mlops", "llmops"]
     for route in routes:
@@ -198,7 +250,7 @@ def test_agent_run_streaming_endpoint() -> None:
         future = pool.submit(
             client.post,
             "/api/v1/agent-runs/stream",
-            headers=auth_header("agents:run", "tools:read"),
+            headers=auth_header("agents:run", "tools:read", "llm:invoke"),
             json={"request": request_text, "request_type": "discovery"},
         )
         job_id: str | None = None

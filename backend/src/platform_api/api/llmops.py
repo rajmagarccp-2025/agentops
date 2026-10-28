@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -50,7 +50,7 @@ from platform_api.llmops_service.service import (
     test_provider_credentials,
     update_registered_model,
 )
-from platform_api.security import Principal, get_current_principal, require_permission
+from platform_api.security import Principal, require_permission
 
 router = APIRouter(prefix="/llmops", tags=["llmops"])
 gateway_router = APIRouter(tags=["chat_gateway"])
@@ -251,7 +251,7 @@ async def add_group_member_endpoint(
 @router.post("/chat/completions", response_model=GatewayChatCompletionResponse)
 async def unified_chat_completion_endpoint(
     body: GatewayChatCompletionRequest,
-    principal: Annotated[Principal, Depends(get_current_principal)],
+    principal: Annotated[Principal, Depends(require_permission("llm:invoke"))],
     db: Session = Depends(get_db),
 ) -> GatewayChatCompletionResponse:
     return invoke_chat_completion(db, principal, body)
@@ -268,10 +268,14 @@ async def legacy_completion(
     try:
         return llm_gateway.complete(body, principal)
     except ProviderError as exc:
+        detail = (
+            str(exc)
+            if exc.status_code in {400, 403, 413, 429}
+            else "No configured LLM provider completed the request"
+        )
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="No configured LLM provider completed the request",
-            headers={"x-llm-error": str(exc)[:200]},
+            status_code=exc.status_code,
+            detail=detail,
         ) from exc
 
 
@@ -286,6 +290,7 @@ class TelemetryResponse(BaseModel):
     latency_ms: float
     retries: int
     fallback_used: bool
+    error: str | None = None
 
 
 @router.get("/telemetry", response_model=list[TelemetryResponse])
@@ -304,6 +309,7 @@ async def telemetry(
             latency_ms=event.latency_ms,
             retries=event.retries,
             fallback_used=event.fallback_used,
+            error=event.error,
         )
         for event in llm_gateway.telemetry.events
         if event.tenant_id == principal.tenant_id

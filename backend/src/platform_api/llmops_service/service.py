@@ -3,11 +3,19 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
+from pydantic import ValidationError
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from platform_api.config import get_settings
 from platform_api.identity_models import Group, UserGroup
 from platform_api.identity_repository import AuditLogRepository
+from platform_api.llm.quota import (
+    TenantQuotaUnavailable,
+    TenantRateLimitExceeded,
+    TenantTokenBudgetExceeded,
+)
+from platform_api.llm.service import llm_gateway
 from platform_api.llmops_service.models import (
     LLMRequestModel,
     ModelAccessPolicy,
@@ -52,7 +60,7 @@ def _record_llm_audit(
     action: str,
     resource_id: str,
     details: dict[str, Any] | None = None,
-):
+) -> None:
     AuditLogRepository().record_event(
         session=db,
         actor=principal.subject,
@@ -412,16 +420,23 @@ def rotate_model_credentials(
         )
 
     if payload.test_connection:
-        conn = test_provider_credentials(
-            TestCredentialRequest(
-                provider=model.provider,
-                model_name=model.model_name,
-                api_key=payload.api_key,
-                base_url=model.base_url,
-                api_version=model.api_version,
-                provider_config=model.provider_config,
+        try:
+            test_request = TestCredentialRequest.model_validate(
+                {
+                    "provider": model.provider,
+                    "model_name": model.model_name,
+                    "api_key": payload.api_key,
+                    "base_url": model.base_url,
+                    "api_version": model.api_version,
+                    "provider_config": model.provider_config,
+                }
             )
-        )
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Stored provider configuration is invalid.",
+            ) from exc
+        conn = test_provider_credentials(test_request)
         if not conn.success:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -732,6 +747,12 @@ def add_user_to_group(
 def invoke_chat_completion(
     db: Session, principal: Principal, request: GatewayChatCompletionRequest
 ) -> GatewayChatCompletionResponse:
+    if "llm:invoke" not in principal.permissions and "*" not in principal.permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Caller lacks permission to invoke the LLM gateway.",
+        )
+
     # 1. Identity & Tenant Check
     target_tenant = request.organization_id or principal.tenant_id
     if target_tenant != principal.tenant_id:
@@ -819,7 +840,77 @@ def invoke_chat_completion(
         provider_config=model.provider_config,
     )
 
-    response = adapter.execute_chat_completion(request)
+    settings = get_settings()
+    estimated_input_tokens = sum(
+        len(message.content.encode("utf-8")) for message in request.messages
+    )
+    output_limit = min(request.max_tokens or 1_000, settings.llm_max_output_tokens)
+    if estimated_input_tokens > settings.llm_max_input_tokens:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Estimated input exceeds the configured token limit.",
+        )
+    if estimated_input_tokens + output_limit > settings.llm_max_total_tokens:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Input and output exceed the request token budget.",
+        )
+
+    reserved_tokens = estimated_input_tokens + output_limit
+    try:
+        llm_gateway.quota.reserve(principal.tenant_id, reserved_tokens)
+    except TenantRateLimitExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+    except TenantTokenBudgetExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+    except TenantQuotaUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Tenant usage quota service is unavailable.",
+        ) from exc
+
+    quota_reserved = True
+    try:
+        bounded_request = request.model_copy(update={"max_tokens": output_limit})
+        response = adapter.execute_chat_completion(bounded_request)
+        actual_input_tokens = response.usage.prompt_tokens
+        actual_output_tokens = response.usage.completion_tokens
+        if actual_input_tokens < 0 or actual_output_tokens < 0:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Provider returned invalid token usage.",
+            )
+        try:
+            llm_gateway.quota.settle(
+                principal.tenant_id,
+                reserved_tokens,
+                actual_input_tokens + actual_output_tokens,
+            )
+            quota_reserved = False
+        except TenantQuotaUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Tenant usage quota accounting is unavailable.",
+            ) from exc
+        if (
+            actual_input_tokens > estimated_input_tokens
+            or actual_output_tokens > output_limit
+            or actual_input_tokens + actual_output_tokens > settings.llm_max_total_tokens
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Provider usage exceeded the configured token limits.",
+            )
+    except Exception:
+        if quota_reserved:
+            try:
+                llm_gateway.quota.release(principal.tenant_id, reserved_tokens)
+            except TenantQuotaUnavailable as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Tenant usage quota accounting is unavailable.",
+                ) from exc
+        raise
 
     # 7. Record Telemetry & Usage Record
     usage_entry = LLMRequestModel(

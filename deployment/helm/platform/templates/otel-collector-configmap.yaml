@@ -1,0 +1,43 @@
+{{- if .Values.telemetry.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "platform.fullname" . }}-otel-collector
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+data:
+  collector.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: agentops-api
+              scrape_interval: 30s
+              metrics_path: /api/v1/metrics
+              static_configs:
+                - targets: ["{{ include "platform.fullname" . }}-api:{{ .Values.api.service.port }}"]
+    processors:
+      batch:
+        timeout: 5s
+    exporters:
+      googlecloud: {}
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [googlecloud]
+        metrics:
+          receivers: [prometheus]
+          processors: [batch]
+          exporters: [googlecloud]
+{{- end }}

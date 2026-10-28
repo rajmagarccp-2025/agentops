@@ -48,9 +48,12 @@ class RequestIdMiddleware:
         }
         scope["state"] = scope_state
         started = perf_counter()
+        response_status = 500
 
         async def send_with_request_id(message: Message) -> None:
+            nonlocal response_status
             if message["type"] == "http.response.start":
+                response_status = int(message["status"])
                 resp_headers = list(message.get("headers", []))
                 resp_headers.append((b"x-request-id", request_id.encode()))
                 resp_headers.append((b"x-correlation-id", correlation_id.encode()))
@@ -62,7 +65,7 @@ class RequestIdMiddleware:
                 message["headers"] = resp_headers
             await send(message)
 
-        route = scope.get("path", "unknown")
+        route = "unmatched"
         span_attrs = {
             "http.method": scope.get("method", ""),
             "http.route": route,
@@ -79,6 +82,9 @@ class RequestIdMiddleware:
         with span("http.request", span_attrs) as request_span:
             await self.app(scope, receive, send_with_request_id)
             duration_ms = (perf_counter() - started) * 1000
+            route_info = scope.get("route")
+            route_template = getattr(route_info, "path", "unmatched")
             if request_span is not None:
                 request_span.set_attribute("http.duration_ms", duration_ms)
-            record_request(scope.get("method", ""), route, 200, duration_ms)
+                request_span.set_attribute("http.route", route_template)
+            record_request(scope.get("method", ""), response_status, duration_ms)

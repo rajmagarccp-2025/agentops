@@ -257,6 +257,16 @@ class SecretRepository:
     def get_version(self, session: Session, version_id: str) -> SecretVersion | None:
         return session.scalar(select(SecretVersion).where(SecretVersion.id == version_id))
 
+    def get_version_by_num(
+        self, session: Session, secret_id: str, version_num: int
+    ) -> SecretVersion | None:
+        return session.scalar(
+            select(SecretVersion).where(
+                SecretVersion.secret_id == secret_id,
+                SecretVersion.version_num == version_num,
+            )
+        )
+
     def get_current_version(self, session: Session, secret_id: str) -> SecretVersion | None:
         secret = self.get_secret_by_id(session, secret_id)
         if not secret or not secret.current_version_id:

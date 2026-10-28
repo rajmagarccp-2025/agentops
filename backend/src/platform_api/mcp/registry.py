@@ -1,16 +1,19 @@
 import hashlib
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from platform_api.config import get_settings
 from platform_api.contracts.domain import CloudProvider
 from platform_api.database import SessionLocal
+from platform_api.governance.opa import OPAUnavailable, approval_input, opa_policy_client
 from platform_api.mcp.audit import AuditSink, create_audit_event
 from platform_api.mcp.models import ToolIdempotencyRecord
 from platform_api.mcp.redaction import sanitize_dict
@@ -50,6 +53,10 @@ class ToolNotFoundError(KeyError):
 
 
 class ToolAuthorizationError(PermissionError):
+    pass
+
+
+class ToolPolicyUnavailableError(RuntimeError):
     pass
 
 
@@ -218,6 +225,8 @@ class ToolRegistry:
         idempotency_key: str | None = None,
         expected_provider: CloudProvider | None = None,
         expected_version: str | None = None,
+        approval_context: dict[str, Any] | None = None,
+        approval_consumer: Callable[[], object] | None = None,
     ) -> ToolExecution:
         tool = self.get(name)
 
@@ -277,6 +286,89 @@ class ToolRegistry:
             )
             return exec_res
 
+        normalized_parameters = validated.model_dump(mode="json")
+        settings = get_settings()
+        policy_decision = None
+        try:
+            policy_decision = opa_policy_client.evaluate(
+                {
+                    "principal": {
+                        "subject": principal.subject,
+                        "tenant_id": principal.tenant_id,
+                        "permissions": sorted(principal.permissions),
+                    },
+                    "tenant_id": principal.tenant_id,
+                    "target_tenant_id": principal.tenant_id,
+                    "action": name.rsplit(".", 1)[-1],
+                    "environment": (
+                        principal.environment_id
+                        or str(normalized_parameters.get("environment", ""))
+                        or str(normalized_parameters.get("namespace", "unknown"))
+                    ).lower(),
+                    "dry_run": dry_run,
+                    "policy_version": "v1.0.0",
+                    "tool": {
+                        "name": name,
+                        "risk": tool.risk.value,
+                        "required_permission": tool.required_permission,
+                    },
+                    "parameters": normalized_parameters,
+                    **approval_input(
+                        approval=approval_context,
+                        action=name.rsplit(".", 1)[-1],
+                        tool_name=name,
+                        tenant_id=principal.tenant_id,
+                        parameters=normalized_parameters,
+                    ),
+                }
+            )
+        except OPAUnavailable as exc:
+            increment("policy.opa.fail_closed")
+            self._audit_sink.record(
+                create_audit_event(
+                    execution_id,
+                    principal.tenant_id,
+                    principal.subject,
+                    name,
+                    tool.risk,
+                    sanitize_dict(parameters),
+                    "policy_unavailable",
+                    request_id,
+                    project_id=getattr(principal, "project_id", None),
+                    environment_id=getattr(principal, "environment_id", None),
+                    actor_email=getattr(principal, "email", None),
+                )
+            )
+            if (
+                settings.opa_required
+                or settings.app_env.lower() == "production"
+                or tool.risk in {
+                    ToolRisk.HIGH_RISK,
+                    ToolRisk.CRITICAL,
+                }
+            ):
+                raise ToolPolicyUnavailableError(
+                    "Policy decision service unavailable"
+                ) from exc
+
+        if policy_decision is not None and not policy_decision.allowed:
+            self._audit_sink.record(
+                create_audit_event(
+                    execution_id,
+                    principal.tenant_id,
+                    principal.subject,
+                    name,
+                    tool.risk,
+                    sanitize_dict(parameters),
+                    "policy_denied",
+                    request_id,
+                    project_id=getattr(principal, "project_id", None),
+                    environment_id=getattr(principal, "environment_id", None),
+                    actor_email=getattr(principal, "email", None),
+                )
+            )
+            raise ToolAuthorizationError("Policy denied tool execution")
+
         if idempotency_key:
             previous = self._reserve_idempotency(
                 tenant_id=principal.tenant_id,
@@ -289,7 +381,14 @@ class ToolRegistry:
                 return previous
 
         # Risk Classification & Approval Integration Interface
-        if tool.risk in {ToolRisk.HIGH_RISK, ToolRisk.CRITICAL} and not dry_run and not approved:
+        requires_approval = (
+            tool.risk in {ToolRisk.HIGH_RISK, ToolRisk.CRITICAL}
+            or (
+                policy_decision is not None
+                and policy_decision.require_human_approval
+            )
+        )
+        if requires_approval and not dry_run and not approved:
             outcome = "approval_required"
             self._audit_sink.record(
                 create_audit_event(
@@ -322,6 +421,56 @@ class ToolRegistry:
                 risk=tool.risk,
             )
             return exec_res
+
+        if policy_decision is not None and requires_approval and approved:
+            try:
+                execution_decision = opa_policy_client.evaluate(
+                    {
+                        "principal": {
+                            "subject": principal.subject,
+                            "tenant_id": principal.tenant_id,
+                            "permissions": sorted(principal.permissions),
+                        },
+                        "tenant_id": principal.tenant_id,
+                        "target_tenant_id": principal.tenant_id,
+                        "action": name.rsplit(".", 1)[-1],
+                        "environment": (
+                            principal.environment_id
+                            or str(normalized_parameters.get("environment", ""))
+                            or str(normalized_parameters.get("namespace", "unknown"))
+                        ).lower(),
+                        "dry_run": dry_run,
+                        "policy_version": "v1.0.0",
+                        "tool": {
+                            "name": name,
+                            "risk": tool.risk.value,
+                            "required_permission": tool.required_permission,
+                        },
+                        "parameters": normalized_parameters,
+                        **approval_input(
+                            approval=approval_context,
+                            action=name.rsplit(".", 1)[-1],
+                            tool_name=name,
+                            tenant_id=principal.tenant_id,
+                            parameters=normalized_parameters,
+                        ),
+                    }
+                )
+            except OPAUnavailable as exc:
+                increment("policy.opa.fail_closed")
+                raise ToolPolicyUnavailableError(
+                    "Policy reauthorization service unavailable"
+                ) from exc
+            if (
+                execution_decision is None
+                or not execution_decision.allowed
+                or execution_decision.require_human_approval
+            ):
+                increment("policy.opa.execution_denied")
+                raise ToolAuthorizationError("Execution-time policy reauthorization denied")
+
+        if requires_approval and approved and approval_consumer is not None:
+            approval_consumer()
 
         # Execution
         from time import perf_counter

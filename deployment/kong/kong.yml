@@ -1,3 +1,4 @@
+# Development-only Docker Compose gateway; never deploy this file to GKE.
 _format_version: "3.0"
 
 services:

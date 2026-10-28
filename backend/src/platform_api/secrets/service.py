@@ -4,7 +4,9 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from platform_api.config import get_settings
 from platform_api.identity_repository import AuditLogRepository
+from platform_api.secrets.cache import get_secret_resolution_cache
 from platform_api.secrets.models import Secret
 from platform_api.secrets.providers.adapters import get_secret_provider_adapter
 from platform_api.secrets.repository import SecretRepository
@@ -21,10 +23,6 @@ from platform_api.secrets.schemas import (
     SecretValueRevealResponse,
 )
 from platform_api.security import Principal
-
-# In-memory runtime cache for secret resolution with tenant isolation
-_RUNTIME_SECRET_CACHE: dict[str, tuple[str, datetime]] = {}
-_CACHE_TTL_SECONDS = 300  # 5 minutes cache TTL
 
 
 class SecretService:
@@ -45,7 +43,7 @@ class SecretService:
         target_entity: str | None = None,
         details: dict[str, Any] | None = None,
         outcome: str = "success",
-    ):
+    ) -> None:
         """Records security audit event for secret operations (NEVER logs raw values)."""
         det = details or {}
         det["outcome"] = outcome
@@ -64,6 +62,19 @@ class SecretService:
             environment_id=environment_id or principal.environment_id,
             details=det,
         )
+
+    @staticmethod
+    def _provider_secret_name(secret: Secret, provider: Any) -> str:
+        if provider.provider_type != "gcp_secret_manager":
+            return secret.name
+        return (
+            f"{secret.scope}|{secret.project_id or ''}|"
+            f"{secret.environment_id or ''}|{secret.name}"
+        )
+
+    @staticmethod
+    def _invalidate_runtime_secret_cache(secret: Secret) -> None:
+        get_secret_resolution_cache().invalidate(secret.tenant_id, secret.id)
 
     # --- Scope and Permission Enforcement Helpers ---
     def _validate_scope_access(
@@ -177,6 +188,22 @@ class SecretService:
     def configure_provider(
         self, principal: Principal, req: SecretProviderCreate
     ) -> SecretProviderResponse:
+        if req.provider_type == "gcp_secret_manager":
+            configured_project = get_settings().gcp_secret_manager_project_id
+            if (
+                not configured_project
+                or req.vault_identifier != configured_project
+                or req.endpoint_url
+                or req.auth_method != "workload_identity"
+                or req.credentials_config
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "GCP Secret Manager must use the configured project and "
+                        "Workload Identity without custom endpoints or credentials."
+                    ),
+                )
         provider = self.repo.create_provider(
             session=self.db,
             tenant_id=principal.tenant_id,
@@ -323,7 +350,10 @@ class SecretService:
 
         # Store secret value via provider adapter
         adapter = get_secret_provider_adapter(provider)
-        v_ref, enc_val, enc_meta = adapter.create_secret(secret.name, req.value, req.metadata)
+        provider_secret_name = self._provider_secret_name(secret, provider)
+        v_ref, enc_val, enc_meta = adapter.create_secret(
+            provider_secret_name, req.value, req.metadata
+        )
 
         # Create initial Version (version 1)
         self.repo.create_version(
@@ -417,7 +447,7 @@ class SecretService:
 
         adapter = get_secret_provider_adapter(provider)
         raw_value = adapter.read_secret_value(
-            secret.name,
+            self._provider_secret_name(secret, provider),
             version_ref=version.provider_version_ref,
             encrypted_value=version.encrypted_value,
             encryption_metadata=version.encryption_metadata,
@@ -475,7 +505,10 @@ class SecretService:
                 provider = self.repo.get_default_provider(self.db, principal.tenant_id)
 
             adapter = get_secret_provider_adapter(provider)
-            v_ref, enc_val, enc_meta = adapter.update_secret_value(secret.name, req.value)
+            provider_secret_name = self._provider_secret_name(secret, provider)
+            v_ref, enc_val, enc_meta = adapter.update_secret_value(
+                provider_secret_name, req.value
+            )
 
             current_ver = self.repo.get_current_version(self.db, secret.id)
             next_num = (current_ver.version_num + 1) if current_ver else 1
@@ -491,8 +524,24 @@ class SecretService:
                 comment="Secret value updated",
             )
             # Invalidate runtime resolution cache
-            cache_key = f"{secret.tenant_id}:{secret.id}"
-            _RUNTIME_SECRET_CACHE.pop(cache_key, None)
+            self._invalidate_runtime_secret_cache(secret)
+
+        if req.status is not None and req.status != secret.status:
+            provider = self.repo.get_provider_by_id(self.db, secret.provider_id)
+            if provider and provider.provider_type == "gcp_secret_manager":
+                adapter = get_secret_provider_adapter(provider)
+                if req.status in {"disabled", "pending_deletion"}:
+                    adapter.delete_secret(self._provider_secret_name(secret, provider))
+                else:
+                    current_version = self.repo.get_current_version(self.db, secret.id)
+                    if current_version and current_version.provider_version_ref:
+                        adapter.set_secret_version_enabled(
+                            self._provider_secret_name(secret, provider),
+                            current_version.provider_version_ref,
+                            enabled=True,
+                        )
+            if req.status in {"disabled", "pending_deletion"}:
+                self._invalidate_runtime_secret_cache(secret)
 
         self.repo.update_secret_metadata(
             session=self.db,
@@ -538,7 +587,8 @@ class SecretService:
         current_ver = self.repo.get_current_version(self.db, secret.id)
         ref = current_ver.provider_version_ref if current_ver else None
 
-        v_ref, enc_val, enc_meta = adapter.rotate_secret(secret.name, ref)
+        provider_secret_name = self._provider_secret_name(secret, provider)
+        v_ref, enc_val, enc_meta = adapter.rotate_secret(provider_secret_name, ref)
         next_num = (current_ver.version_num + 1) if current_ver else 1
 
         self.repo.create_version(
@@ -556,8 +606,7 @@ class SecretService:
         secret.updated_at = datetime.now(UTC)
 
         # Invalidate runtime cache
-        cache_key = f"{secret.tenant_id}:{secret.id}"
-        _RUNTIME_SECRET_CACHE.pop(cache_key, None)
+        self._invalidate_runtime_secret_cache(secret)
 
         self._record_audit(
             principal,
@@ -572,6 +621,66 @@ class SecretService:
 
         return self._build_metadata_response(secret)
 
+    def rollback_secret(
+        self, principal: Principal, secret_id: str, target_version_num: int
+    ) -> SecretMetadataResponse:
+        secret = self.repo.get_secret_by_id(self.db, secret_id)
+        if not secret:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found.")
+        self._validate_scope_access(principal, secret, "secrets.rotate")
+        if secret.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only active secrets can be rolled back.",
+            )
+
+        target_version = self.repo.get_version_by_num(self.db, secret.id, target_version_num)
+        if not target_version:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Secret version not found."
+            )
+        provider = self.repo.get_provider_by_id(self.db, secret.provider_id)
+        if not provider:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Secret provider is unavailable.",
+            )
+
+        adapter = get_secret_provider_adapter(provider)
+        restored_value = adapter.read_secret_value(
+            self._provider_secret_name(secret, provider),
+            version_ref=target_version.provider_version_ref,
+            encrypted_value=target_version.encrypted_value,
+            encryption_metadata=target_version.encryption_metadata,
+        )
+        current_version = self.repo.get_current_version(self.db, secret.id)
+        next_version_num = current_version.version_num + 1 if current_version else 1
+        version_ref, encrypted_value, encryption_metadata = adapter.update_secret_value(
+            self._provider_secret_name(secret, provider), restored_value
+        )
+        self.repo.create_version(
+            session=self.db,
+            secret_id=secret.id,
+            version_num=next_version_num,
+            created_by=principal.subject,
+            provider_version_ref=version_ref,
+            encrypted_value=encrypted_value,
+            encryption_metadata=encryption_metadata,
+            comment=f"Restored from version {target_version_num}",
+        )
+        self._invalidate_runtime_secret_cache(secret)
+        self._record_audit(
+            principal,
+            "secret.version_restored",
+            secret.id,
+            organization_id=secret.tenant_id,
+            project_id=secret.project_id,
+            environment_id=secret.environment_id,
+            details={"restored_from_version": target_version_num, "new_version": next_version_num},
+        )
+        self.db.commit()
+        return self._build_metadata_response(secret)
+
     def revoke_secret(self, principal: Principal, secret_id: str) -> dict[str, Any]:
         secret = self.repo.get_secret_by_id(self.db, secret_id)
         if not secret:
@@ -579,12 +688,22 @@ class SecretService:
         self._validate_scope_access(principal, secret, "secrets.revoke")
         if secret.status == "revoked":
             return {"success": True, "status": "revoked"}
+        provider = self.repo.get_provider_by_id(self.db, secret.provider_id)
+        version = self.repo.get_current_version(self.db, secret.id)
+        if (
+            provider
+            and provider.provider_type == "gcp_secret_manager"
+            and version
+            and version.provider_version_ref
+        ):
+            adapter = get_secret_provider_adapter(provider)
+            adapter.delete_secret(self._provider_secret_name(secret, provider))
         secret.status = "revoked"
         secret.revoked_at = datetime.now(UTC)
         secret.revoked_by = principal.subject
         secret.modified_by = principal.subject
         secret.updated_at = datetime.now(UTC)
-        _RUNTIME_SECRET_CACHE.pop(f"{secret.tenant_id}:{secret.id}", None)
+        self._invalidate_runtime_secret_cache(secret)
         self._record_audit(
             principal,
             "secret.revoked",
@@ -606,7 +725,7 @@ class SecretService:
         provider = self.repo.get_provider_by_id(self.db, secret.provider_id)
         if provider:
             adapter = get_secret_provider_adapter(provider)
-            adapter.delete_secret(secret.name)
+            adapter.delete_secret(self._provider_secret_name(secret, provider))
 
         self._record_audit(
             principal,
@@ -620,7 +739,15 @@ class SecretService:
         self.repo.delete_secret(self.db, secret.id)
         self.db.commit()
 
-        return {"success": True, "message": f"Secret '{secret.name}' securely deleted."}
+        if provider and provider.provider_type == "gcp_secret_manager":
+            message = (
+                f"Secret '{secret.name}' metadata was deleted and enabled GCP versions were "
+                "disabled; the cloud resource remains retained."
+            )
+        else:
+            message = f"Secret '{secret.name}' securely deleted."
+        self._invalidate_runtime_secret_cache(secret)
+        return {"success": True, "message": message}
 
     def assign_entity(
         self, principal: Principal, secret_id: str, req: SecretAssignmentCreate
@@ -759,7 +886,7 @@ class SecretService:
                     details={"expiration_date": expires_at.isoformat()},
                 )
                 self.db.commit()
-                _RUNTIME_SECRET_CACHE.pop(f"{secret.tenant_id}:{secret.id}", None)
+                self._invalidate_runtime_secret_cache(secret)
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Secret has expired.",
@@ -790,12 +917,16 @@ class SecretService:
             provider = self.repo.get_default_provider(self.db, principal.tenant_id)
 
         adapter = get_secret_provider_adapter(provider)
-        raw_val = adapter.read_secret_value(
-            secret.name,
-            version_ref=version.provider_version_ref,
-            encrypted_value=version.encrypted_value,
-            encryption_metadata=version.encryption_metadata,
-        )
+        secret_cache = get_secret_resolution_cache()
+        raw_val = secret_cache.get(secret.tenant_id, secret.id, version.id)
+        if raw_val is None:
+            raw_val = adapter.read_secret_value(
+                self._provider_secret_name(secret, provider),
+                version_ref=version.provider_version_ref,
+                encrypted_value=version.encrypted_value,
+                encryption_metadata=version.encryption_metadata,
+            )
+            secret_cache.set(secret.tenant_id, secret.id, version.id, raw_val)
 
         self._record_audit(
             principal,

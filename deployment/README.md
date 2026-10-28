@@ -96,11 +96,54 @@ HTTPS and that its OpenID Connect discovery document is reachable and reports
 the exact configured issuer. A localhost issuer such as
 `http://localhost:8080` is rejected.
 
-The current Terraform root does not provision Keycloak, Kong, public DNS, or
-TLS certificates. The GCP Helm values keep ingress disabled, so successful
+The current Terraform root does not provision Keycloak or Kong. The GCP Helm
+values keep the public Gateway disabled, so successful
 application rollout is not the same as making the application publicly
-reachable. Configure the production identity provider and implement the
-approved Kong/DNS/TLS edge before enabling rollout for users.
+reachable. Configure the production identity provider and supply owner-approved
+DNS/TLS values before enabling the public edge. The GCP chart deploys
+Kong Gateway OSS as a private ClusterIP edge. Kong owns API routing, per-IP
+best-effort edge limits, and request-size limits; the API remains authoritative
+for OIDC validation, authorization, tenant scope, and LLM budgets/model routing.
+Kong AI Gateway plugins are intentionally not enabled; adding them requires an
+approved Kong edition/license and a separate policy-ownership review. The
+development-only `deployment/kong/kong.yml` is used by Docker Compose and must
+not be deployed to GKE.
+
+### OPA and telemetry
+
+The GCP Helm profile deploys OPA as a private, read-only-policy service. Only
+API pods can call its decision endpoint; API mutations fail closed when OPA is
+unavailable. The policy checked into `policy/agentops` is packaged in the Helm
+chart and a CI check verifies that the packaged policy matches the tested
+source. OPA is not a public service and its control endpoints are not exposed
+outside the cluster.
+
+The GCP profile also enables an OpenTelemetry Collector. API traces are sent
+over cluster-internal OTLP/gRPC, while the Collector scrapes the API metrics
+endpoint and exports both signals to Cloud Trace and Cloud Monitoring using
+the GKE Workload Identity service account. GKE's managed logging agent collects
+the API's structured stdout logs into Cloud Logging. Verify the Cloud IAM
+bindings, Collector health, trace/metric arrival, dashboards, and alert routing
+in the target project; source configuration alone is not delivery evidence.
+`ServiceMonitor` remains disabled because Prometheus Operator installation has
+not been confirmed.
+
+### Optional public Gateway
+
+The chart's public GKE Gateway API resources are disabled by default. To
+activate them, first review and opt in to Terraform variables
+`enable_public_edge=true` and `enable_public_dns_record=true` only for an
+approved domain and existing Cloud DNS zone that this project is authorized to
+change. Terraform then reserves the global address, creates a Cloud Armor
+policy, DNS authorization, Google-managed certificate and certificate map, and
+publishes the A/CNAME records. The SQL-injection and XSS WAF rules start in
+preview; the IP throttle is enforced. After reviewing the exact plan and
+confirming DNS ownership, deploy the chart with
+`gateway.enabled=true`, `gateway.domain`, and the corresponding Terraform
+outputs `public_edge_ip_name`, `public_edge_cloud_armor_policy_name`, and
+`public_edge_certificate_map`. No public edge or DNS change is enabled by the
+checked-in default values. Test Gateway health and rollback in a non-production
+environment before any production cutover.
 
 See `infrastructure/terraform/gcp/README.md` for remote-state and drift-check
 commands.

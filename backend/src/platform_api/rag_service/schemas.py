@@ -20,7 +20,7 @@ DocumentScope = Literal["environment", "project"]
 class DocumentCreate(BaseModel):
     source: str = Field(min_length=1, max_length=500)
     title: str = Field(min_length=1, max_length=300)
-    content: str = Field(min_length=1, max_length=1_000_000)
+    content: str = Field(min_length=1, max_length=10 * 1024 * 1024)
     document_type: DocumentType
     version: int = Field(default=1, ge=1)
     service: str | None = Field(default=None, max_length=200)
@@ -60,6 +60,10 @@ class DocumentChunk(BaseModel):
     content: str
     metadata: dict[str, Any]
     embedding: list[float]
+    embedding_provider: str
+    embedding_model: str
+    embedding_version: str
+    embedding_dimensions: int
 
 
 class Citation(BaseModel):

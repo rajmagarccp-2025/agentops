@@ -4,14 +4,17 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from opentelemetry import trace
+from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span, Status, StatusCode
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from opentelemetry.util.types import AttributeValue
 
 from platform_api.config import get_settings
 
 _metrics: Counter[str] = Counter()
+_gauges: dict[str, int] = {}
 _tracer: trace.Tracer | None = None
 _propagator = TraceContextTextMapPropagator()
 
@@ -71,15 +74,16 @@ def configure_observability() -> None:
         or settings.app_env == "test"
     )
     if settings.otel_exporter_otlp_endpoint and not is_test_env:
-        try:
-            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-            from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-            provider.add_span_processor(
-                BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otel_exporter_otlp_endpoint))
-            )
-        except Exception:
-            pass
+        provider.add_span_processor(
+            BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otel_exporter_otlp_endpoint))
+        )
+    elif settings.otel_exporter_required and not is_test_env:
+        raise RuntimeError(
+            "OTEL_EXPORTER_OTLP_ENDPOINT is required when telemetry export is mandatory"
+        )
     trace.set_tracer_provider(provider)
     _tracer = trace.get_tracer(settings.otel_service_name)
 
@@ -88,10 +92,18 @@ def increment(metric: str, value: int = 1) -> None:
     _metrics[metric] += value
 
 
+def set_gauge(metric: str, value: int) -> None:
+    _gauges[metric] = value
+
+
 def metrics_text() -> str:
-    return "".join(
+    counters = "".join(
         f"platform_{name.replace('.', '_')} {value}\n" for name, value in sorted(_metrics.items())
     )
+    gauges = "".join(
+        f"platform_{name.replace('.', '_')} {value}\n" for name, value in sorted(_gauges.items())
+    )
+    return counters + gauges
 
 
 def metrics_snapshot() -> dict[str, int]:
@@ -111,6 +123,7 @@ def metrics_snapshot() -> dict[str, int]:
         "llm_requests_total": _metrics.get("llm.requests.total", 0),
         "llm_prompt_tokens_total": _metrics.get("llm.tokens.prompt", 0),
         "llm_completion_tokens_total": _metrics.get("llm.tokens.completion", 0),
+        "workflow_jobs_enqueued_total": _metrics.get("workflow.jobs.enqueued", 0),
         "tool_executions_total": _metrics.get("mcp.tool_executions.total", 0),
         "tool_errors_total": tool_errors,
         "workflow_executions_total": _metrics.get("workflow.executions.total", 0),
@@ -118,22 +131,23 @@ def metrics_snapshot() -> dict[str, int]:
     return snapshot
 
 
-def extract_w3c_context(carrier: dict[str, str]) -> trace.Context:
+def extract_w3c_context(carrier: dict[str, str]) -> Context:
     """Extract W3C tracecontext propagation headers (traceparent, tracestate)."""
     return _propagator.extract(carrier=carrier)
 
 
-def inject_w3c_context(carrier: dict[str, str], context: trace.Context | None = None) -> None:
+def inject_w3c_context(carrier: dict[str, str], context: Context | None = None) -> None:
     """Inject W3C tracecontext headers (traceparent, tracestate) into outbound requests."""
     _propagator.inject(carrier=carrier, context=context)
 
 
 @contextmanager
-def span(name: str, attributes: dict[str, object] | None = None) -> Iterator[Span | None]:
+def span(name: str, attributes: dict[str, AttributeValue] | None = None) -> Iterator[Span | None]:
     tracer = _tracer or trace.get_tracer("agentic-platform")
     with tracer.start_as_current_span(name) as current:
         if attributes:
             for key, value in attributes.items():
+                attribute_value: AttributeValue
                 if any(
                     sec in key.lower()
                     for sec in ["secret", "password", "token", "key", "authorization"]
@@ -153,11 +167,11 @@ def span(name: str, attributes: dict[str, object] | None = None) -> Iterator[Spa
             raise
 
 
-def record_request(method: str, route: str, status_code: int, duration_ms: float) -> None:
+def record_request(method: str, status_code: int, duration_ms: float) -> None:
     increment("http.requests.total")
     increment(f"http.responses.{status_code}")
-    increment(f"http.route.{method.lower()}.{route}.total")
-    _metrics[f"http.duration_ms.{route}"] += int(duration_ms)
+    increment(f"http.methods.{method.lower()}.total")
+    _metrics["http.duration_ms"] += int(duration_ms)
 
 
 def record_llm_metrics(

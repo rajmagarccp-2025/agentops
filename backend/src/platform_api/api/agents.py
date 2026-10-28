@@ -6,10 +6,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, 
 from pydantic import BaseModel, Field
 
 from platform_api.agents.service import agent_runtime
-from platform_api.agents.state import AgentState
+from platform_api.agents.state import AgentState, HypothesisItem, StructuredFinding
 from platform_api.config import get_settings
 from platform_api.security import Principal, get_current_principal, require_permission
-from platform_api.workflow_queue import WorkflowQueueFullError
+from platform_api.workflow_queue import WorkflowQueueFullError, workflow_queue
 
 router = APIRouter(prefix="/agent-runs", tags=["agents"])
 AgentRunType = Literal[
@@ -58,9 +58,9 @@ class AgentRunResponse(BaseModel):
     approval_required: bool = False
     approval_id: str | None = None
     inventory_count: int | None = None
-    structured_findings: list[dict[str, object]] = Field(default_factory=list)
+    structured_findings: list[StructuredFinding] = Field(default_factory=list)
     findings: list[str] = Field(default_factory=list)
-    hypotheses: list[dict[str, object]] = Field(default_factory=list)
+    hypotheses: list[HypothesisItem] = Field(default_factory=list)
     confidence: float | None = None
     missing_evidence: list[str] = Field(default_factory=list)
     recommendation: str | None = None
@@ -81,6 +81,13 @@ class AgentRunListItem(BaseModel):
     target_resource: str | None = None
     error: str | None = None
     updated_at: str
+
+
+class AgentRunReplayResponse(BaseModel):
+    run_id: str
+    job_id: str
+    status: str
+    attempts: int
 
 
 def get_agent_run_reader(
@@ -241,9 +248,7 @@ async def cancel_agent_run(
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent run not found")
     try:
-        return _response(
-            agent_runtime.cancel(run_id, tenant_id=principal.tenant_id)
-        )
+        return _response(agent_runtime.cancel(run_id, tenant_id=principal.tenant_id))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except KeyError as exc:
@@ -251,6 +256,50 @@ async def cancel_agent_run(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Agent run not found",
         ) from exc
+
+
+@router.post(
+    "/{run_id}/replay",
+    response_model=AgentRunReplayResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def replay_dead_letter_agent_run(
+    run_id: str,
+    principal: Annotated[Principal, Depends(require_permission("workflow:replay"))],
+) -> AgentRunReplayResponse:
+    try:
+        state = agent_runtime.get(run_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent run not found",
+        ) from exc
+    if (
+        state.get("tenant_id") != principal.tenant_id
+        or (principal.project_id and state.get("workspace_project_id") != principal.project_id)
+        or (
+            principal.environment_id
+            and state.get("workspace_environment_id") != principal.environment_id
+        )
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent run not found")
+    try:
+        job = workflow_queue.replay_dead_letter(
+            run_id,
+            tenant_id=principal.tenant_id,
+            actor=principal.subject,
+            actor_email=principal.email,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent run not found")
+    return AgentRunReplayResponse(
+        run_id=run_id,
+        job_id=job.id,
+        status=job.status,
+        attempts=job.attempts,
+    )
 
 
 @router.post("/stream")

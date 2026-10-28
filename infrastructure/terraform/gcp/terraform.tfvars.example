@@ -1,8 +1,10 @@
-project_id             = "project-cks-aug2026"
-project_name           = "agentops-platform"
-environment            = "prod"
-region                 = "us-central1"
-namespace              = "prod"
-service_account_name   = "agentops-platform-sa-gcp"
+project_id              = "replace-with-approved-project-id"
+project_name            = "replace-with-approved-resource-prefix"
+environment             = "replace-with-approved-environment"
+region                  = "replace-with-approved-region"
+namespace               = "replace-with-approved-namespace"
+service_account_name    = "replace-with-approved-runtime-service-account"
 cluster_release_channel = "REGULAR"
-database_password      = "set-through-a-secret-manager-or-tfvars-not-source-control"
+
+# Intentionally omitted: provide database_password only via the protected
+# TF_VAR_database_password environment variable.

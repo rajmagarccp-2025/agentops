@@ -98,3 +98,8 @@ class BaseSecretProviderAdapter(ABC):
     @abstractmethod
     def delete_secret(self, secret_name: str, version_ref: str | None = None) -> bool:
         pass
+
+    def set_secret_version_enabled(
+        self, secret_name: str, version_ref: str, enabled: bool
+    ) -> bool:
+        raise NotImplementedError("This secret provider does not support version state changes")

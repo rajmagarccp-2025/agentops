@@ -1,0 +1,89 @@
+{{- if .Values.gateway.enabled }}
+{{- if not .Values.kong.enabled }}
+{{- fail "gateway.enabled requires kong.enabled" }}
+{{- end }}
+{{- if or (empty .Values.gateway.domain) (empty .Values.gateway.staticAddressName) (empty .Values.gateway.certificateMap) (empty .Values.gateway.cloudArmorPolicy) }}
+{{- fail "gateway.enabled requires domain, staticAddressName, certificateMap, and cloudArmorPolicy" }}
+{{- end }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ include "platform.fullname" . }}-public
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+  annotations:
+    networking.gke.io/address-name: {{ .Values.gateway.staticAddressName | quote }}
+    networking.gke.io/certmap: {{ .Values.gateway.certificateMap | quote }}
+spec:
+  gatewayClassName: gke-l7-global-external-managed
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: {{ .Values.gateway.domain | quote }}
+      tls:
+        mode: Terminate
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "platform.fullname" . }}-public
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - name: {{ include "platform.fullname" . }}-public
+  hostnames:
+    - {{ .Values.gateway.domain | quote }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ include "platform.fullname" . }}-kong
+          port: {{ .Values.kong.service.port }}
+---
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: {{ include "platform.fullname" . }}-kong-armor
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  default:
+    securityPolicy: {{ .Values.gateway.cloudArmorPolicy | quote }}
+  targetRef:
+    group: ""
+    kind: Service
+    name: {{ include "platform.fullname" . }}-kong
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: {{ include "platform.fullname" . }}-kong-healthcheck
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  default:
+    checkIntervalSec: 30
+    timeoutSec: 5
+    healthyThreshold: 1
+    unhealthyThreshold: 3
+    config:
+      type: HTTP
+      httpHealthCheck:
+        portSpecification: USE_SERVING_PORT
+        requestPath: /api/v1/health
+  targetRef:
+    group: ""
+    kind: Service
+    name: {{ include "platform.fullname" . }}-kong
+{{- end }}

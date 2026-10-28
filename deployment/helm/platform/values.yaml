@@ -35,6 +35,87 @@ config:
     sslMode: prefer
   redis:
     maxConnections: 50
+    cacheConnections: 16
+    cacheTimeoutSeconds: "0.1"
+
+secretCache:
+  ttlSeconds: 300
+  maxValueBytes: 65536
+
+rag:
+  documentStorageBackend: postgres
+  gcsDocumentBucket: ""
+  maxDocumentBytes: "10485760"
+
+secretManager:
+  projectId: ""
+
+workflowQueue:
+  backend: database
+  projectId: ""
+  topicId: ""
+  subscriptionId: ""
+  pollBatchSize: 10
+  ackExtensionSeconds: 60
+  outboxRetentionDays: 30
+
+llm:
+  provider: mock
+  maxInputTokens: 32768
+  maxOutputTokens: 8192
+  maxTotalTokens: 40960
+  tenantRequestsPerMinute: 60
+  tenantDailyTokenBudget: 100000
+  vertexProjectId: ""
+  vertexLocation: us-central1
+  reasoningModel: gemini-2.5-flash
+  fastModel: gemini-2.5-flash-lite
+  longContextModel: gemini-2.5-pro
+  structuredModel: gemini-2.5-flash
+  timeoutSeconds: "30"
+  vertexMaxOutputTokens: 8192
+  maxConcurrentRequests: 16
+  embeddingProvider: hash
+  embeddingModel: text-embedding-005
+  embeddingDimensions: 768
+
+opa:
+  enabled: false
+  image:
+    repository: openpolicyagent/opa
+    tag: "1.4.2"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  timeoutSeconds: "1"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+telemetry:
+  enabled: false
+  image:
+    repository: otel/opentelemetry-collector-contrib
+    tag: "0.120.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+gateway:
+  enabled: false
+  domain: ""
+  staticAddressName: ""
+  certificateMap: ""
+  cloudArmorPolicy: ""
 
 # Database and Redis external secret / config references
 secrets:
@@ -208,3 +289,22 @@ serviceMonitor:
   path: /metrics
   labels:
     release: prometheus-stack
+
+kong:
+  enabled: false
+  image:
+    repository: kong
+    tag: "3.9.1"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  rateLimitPerMinute: 60
+  maxRequestSizeMegabytes: 12
+  service:
+    port: 80
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi

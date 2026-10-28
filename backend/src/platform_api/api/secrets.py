@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Path, Query, status
 from sqlalchemy.orm import Session
 
 from platform_api.database import get_db
@@ -117,6 +117,19 @@ async def rotate_secret(
     principal: Annotated[Principal, Depends(require_permission("secrets.rotate"))],
 ) -> SecretMetadataResponse:
     return SecretService(db).rotate_secret(principal, secret_id)
+
+
+@router.post(
+    "/secrets/{secret_id}/versions/{version_num}/restore",
+    response_model=SecretMetadataResponse,
+)
+async def restore_secret_version(
+    secret_id: str,
+    version_num: Annotated[int, Path(ge=1)],
+    db: Annotated[Session, Depends(get_db)],
+    principal: Annotated[Principal, Depends(require_permission("secrets.rotate"))],
+) -> SecretMetadataResponse:
+    return SecretService(db).rollback_secret(principal, secret_id, version_num)
 
 
 @router.post("/secrets/{secret_id}/revoke", response_model=dict[str, Any])

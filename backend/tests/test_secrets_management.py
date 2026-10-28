@@ -15,6 +15,7 @@ from platform_api.identity_repository import (
     TenantRepository,
 )
 from platform_api.main import app
+from platform_api.secrets import service as secret_service
 from platform_api.secrets.crypto import InternalCryptoService
 from platform_api.secrets.providers import adapters as secret_provider_adapters
 from platform_api.secrets.providers.base import validate_provider_endpoint_ssrf
@@ -36,6 +37,55 @@ def test_external_secret_provider_scaffolds_are_disabled_in_production(
             SimpleNamespace(provider_type="aws_secrets_manager")
         )
     assert exc.value.status_code == 503
+
+
+def test_secret_version_restore_creates_a_new_version_and_is_audited() -> None:
+    ctx = _setup_org_and_users()
+    provider_id = client.get(
+        "/api/v1/secret-providers", headers=ctx["headers_admin"]
+    ).json()[0]["id"]
+    created = client.post(
+        "/api/v1/secrets",
+        headers=ctx["headers_admin"],
+        json={
+            "name": "ROLLBACK_TEST_SECRET",
+            "provider_id": provider_id,
+            "scope": "organization",
+            "value": "original-version",
+        },
+    )
+    assert created.status_code == 201
+    secret_id = created.json()["id"]
+
+    updated = client.patch(
+        f"/api/v1/secrets/{secret_id}",
+        headers=ctx["headers_admin"],
+        json={"value": "updated-version"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["current_version_num"] == 2
+
+    denied = client.post(
+        f"/api/v1/secrets/{secret_id}/versions/1/restore",
+        headers=ctx["headers_reader"],
+    )
+    assert denied.status_code == 403
+
+    restored = client.post(
+        f"/api/v1/secrets/{secret_id}/versions/1/restore",
+        headers=ctx["headers_admin"],
+    )
+    assert restored.status_code == 200
+    assert restored.json()["current_version_num"] == 3
+
+    revealed = client.post(f"/api/v1/secrets/{secret_id}/reveal", headers=ctx["headers_admin"])
+    assert revealed.status_code == 200
+    assert revealed.json()["value"] == "original-version"
+
+    audit = client.get(
+        f"/api/v1/secrets/{secret_id}/audit", headers=ctx["headers_admin"]
+    )
+    assert "secret.version_restored" in [event["action"] for event in audit.json()]
 
 
 @pytest.fixture(autouse=True)
@@ -288,7 +338,29 @@ def test_4_reader_permissions():
     assert rev_res.status_code == 403
 
 
-def test_5_entity_assignment_and_runtime_resolution():
+def test_5_entity_assignment_and_runtime_resolution(monkeypatch: pytest.MonkeyPatch):
+    class MemorySecretCache:
+        def __init__(self) -> None:
+            self.values: dict[tuple[str, str], tuple[str, str]] = {}
+            self.reads = 0
+            self.hits = 0
+
+        def get(self, tenant_id: str, secret_id: str, version_id: str) -> str | None:
+            self.reads += 1
+            cached = self.values.get((tenant_id, secret_id))
+            if cached and cached[0] == version_id:
+                self.hits += 1
+                return cached[1]
+            return None
+
+        def set(self, tenant_id: str, secret_id: str, version_id: str, value: str) -> None:
+            self.values[(tenant_id, secret_id)] = (version_id, value)
+
+        def invalidate(self, tenant_id: str, secret_id: str) -> None:
+            self.values.pop((tenant_id, secret_id), None)
+
+    cache = MemorySecretCache()
+    monkeypatch.setattr(secret_service, "get_secret_resolution_cache", lambda: cache)
     ctx = _setup_org_and_users()
     prov_id = client.get("/api/v1/secret-providers", headers=ctx["headers_admin"]).json()[0]["id"]
 
@@ -328,6 +400,19 @@ def test_5_entity_assignment_and_runtime_resolution():
     assert res_ok.status_code == 200
     assert res_ok.json()["value"] == "KeyForAgentOnly"
 
+    res_cached = client.post(
+        "/api/v1/secrets/resolve",
+        headers=ctx["headers_runtime"],
+        json={
+            "secret_identifier": "AGENT_MODEL_KEY",
+            "requesting_entity_type": "agent",
+            "requesting_entity_id": "sre-agent-01",
+        },
+    )
+    assert res_cached.status_code == 200
+    assert cache.reads == 2
+    assert cache.hits == 1
+
     # Runtime Resolution for unassigned agent fails
     res_deny = client.post(
         "/api/v1/secrets/resolve",
@@ -339,6 +424,7 @@ def test_5_entity_assignment_and_runtime_resolution():
         },
     )
     assert res_deny.status_code == 403
+    assert cache.reads == 2
 
 
 def test_6_tenant_and_scope_isolation():

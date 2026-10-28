@@ -1,3 +1,6 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -35,6 +38,8 @@ from platform_api.errors import ApplicationError, application_error_handler
 from platform_api.logging_config import configure_logging
 from platform_api.middleware import RequestIdMiddleware
 from platform_api.observability import configure_observability
+from platform_api.redis_client import close_redis_client
+from platform_api.secrets.cache import close_cache_client
 from platform_api.security import _decode_token
 
 settings = get_settings()
@@ -48,11 +53,19 @@ class HealthResponse(BaseModel):
     version: str = "0.1.0"
 
 
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    yield
+    await close_redis_client()
+    close_cache_client()
+
+
 app = FastAPI(
     title="AgentOps API",
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 DEMO_READ_ONLY_ALLOWED_WRITES = {
