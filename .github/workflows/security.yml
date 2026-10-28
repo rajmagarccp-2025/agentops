@@ -1,22 +1,30 @@
-name: Security Scan & SAST Pipeline
+name: Security audit
 
 on:
   push:
-    branches: [ main ]
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
   schedule:
-    - cron: '0 2 * * *'
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  security-audit:
-    name: Security & SAST Scanning
+  filesystem-audit:
+    name: Dependency, configuration, and secret scan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Run Trivy vulnerability scanner
+      - name: Scan dependencies, IaC, and repository secrets
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'table'
-          exit-code: '0'
-          severity: 'CRITICAL,HIGH'
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
