@@ -87,13 +87,6 @@ variable "enable_public_dns_record" {
   description = "Create an A record in the explicitly named existing DNS zone. Requires review before apply."
   type        = bool
   default     = false
-
-  validation {
-    condition = !var.enable_public_dns_record || (
-      var.enable_public_edge && var.public_domain != "" && var.dns_managed_zone != ""
-    )
-    error_message = "Public DNS requires the public edge, a public domain, and an existing managed zone name."
-  }
 }
 
 variable "public_domain" {
@@ -269,6 +262,15 @@ resource "google_compute_security_policy" "public_edge" {
 data "google_dns_managed_zone" "public_edge" {
   count = var.enable_public_dns_record ? 1 : 0
   name  = var.dns_managed_zone
+
+  lifecycle {
+    precondition {
+      condition = (
+        var.enable_public_edge && var.public_domain != "" && var.dns_managed_zone != ""
+      )
+      error_message = "Public DNS requires the public edge, a public domain, and an existing managed zone name."
+    }
+  }
 
   depends_on = [google_project_service.public_dns]
 }
